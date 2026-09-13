@@ -4,8 +4,8 @@ import type {
   ProductVariant,
   DeliveryRegion,
   StoreSettings,
-} from '../types';
-import { adminPublicGet } from './adminApi';
+} from '../types.js';
+import { adminPublicGet } from './adminApi.js';
 
 type AdminCategory = {
   id: string;

@@ -3,8 +3,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { INITIAL_SETTINGS } from './src/data/initialData';
-import { syncAllServerData } from './src/server/serverData';
+import { INITIAL_SETTINGS } from './src/data/initialData.js';
+import { syncAllServerData } from './src/server/serverData.js';
 import type { 
   Product, 
   ProductVariant, 
@@ -16,17 +16,17 @@ import type {
   CustomerUser, 
   CreateOrderPayload,
   PaymentMethod 
-} from './src/types';
-import { getServerSupabase } from './src/server/supabaseAdmin';
+} from './src/types.js';
+import { getServerSupabase } from './src/server/supabaseAdmin.js';
 import {
   fetchAdminProducts,
   fetchAdminRegions,
   fetchAdminSettings,
-} from './src/server/adminData';
+} from './src/server/adminData.js';
 import {
   adminIntegrationPost,
   adminPublicPost,
-} from './src/server/adminApi';
+} from './src/server/adminApi.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

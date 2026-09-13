@@ -1,17 +1,17 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { getServerSupabase } from './supabaseAdmin';
+import { getServerSupabase } from './supabaseAdmin.js';
 import { 
   Product, 
   ProductVariant, 
   Coupon, 
   DeliveryRegion, 
   StoreSettings 
-} from '../types';
+} from '../types.js';
 import { 
   INITIAL_REGIONS, 
   INITIAL_SETTINGS, 
   INITIAL_COUPONS 
-} from '../data/initialData';
+} from '../data/initialData.js';
 
 /**
  * SERVER-SIDE Supabase Data Fetchers
