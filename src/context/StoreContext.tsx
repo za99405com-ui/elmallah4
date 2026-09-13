@@ -15,10 +15,8 @@ import {
   CreateOrderPayload
 } from '../types';
 import { 
-  INITIAL_PRODUCTS, 
   INITIAL_SETTINGS, 
   INITIAL_REGIONS,
-  fetchProductsFromSupabase,
   fetchDeliveryRegionsFromSupabase,
   fetchStoreSettingsFromSupabase
 } from '../data/initialData';
@@ -159,22 +157,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   // Products & Categories
-  const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const saved = localStorage.getItem('almallah_products_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Exclude any legacy mock items
-          const cleaned = parsed.filter(p => p && !['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'].includes(p.id));
-          return cleaned;
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return INITIAL_PRODUCTS;
-  });
+  // Products are server-authoritative.
+  // Do not hydrate legacy product catalog from localStorage.
+  const [products, setProducts] = useState<Product[]>([]);
 
   useEffect(() => {
     try {
@@ -452,10 +437,13 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         api.getSettings()
       ]);
 
-      let backendProvidedProducts = false;
-      if (productsRes.status === 'fulfilled' && productsRes.value?.success && productsRes.value.data?.length > 0) {
-        setProducts(productsRes.value.data);
-        backendProvidedProducts = true;
+      if (productsRes.status === 'fulfilled' && productsRes.value?.success) {
+        // Admin is authoritative even when the catalog is intentionally empty.
+        setProducts(
+          Array.isArray(productsRes.value.data)
+            ? productsRes.value.data
+            : []
+        );
         setBackendConnected(true);
       }
       if (regionsRes.status === 'fulfilled' && regionsRes.value?.success && regionsRes.value.data?.length > 0) {
@@ -465,21 +453,30 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setStoreSettings(prev => ({ ...prev, ...settingsRes.value.data }));
       }
 
-      // 2. Fallback to direct client Supabase ONLY if backend returned no products or failed
-      if (!backendProvidedProducts) {
-        const [supProducts, supRegions, supSettings] = await Promise.allSettled([
-          fetchProductsFromSupabase(),
+      // 2. Products never fall back to legacy/direct browser data.
+      // Regions/settings keep their existing temporary fallback independently.
+      if (
+        regionsRes.status !== 'fulfilled' ||
+        settingsRes.status !== 'fulfilled'
+      ) {
+        const [supRegions, supSettings] = await Promise.allSettled([
           fetchDeliveryRegionsFromSupabase(),
           fetchStoreSettingsFromSupabase()
         ]);
 
-        if (supProducts.status === 'fulfilled' && supProducts.value.length > 0) {
-          setProducts(supProducts.value);
-        }
-        if (regionsRes.status !== 'fulfilled' && supRegions.status === 'fulfilled' && supRegions.value.length > 0) {
+        if (
+          regionsRes.status !== 'fulfilled' &&
+          supRegions.status === 'fulfilled' &&
+          supRegions.value.length > 0
+        ) {
           setRegions(supRegions.value);
         }
-        if (settingsRes.status !== 'fulfilled' && supSettings.status === 'fulfilled' && supSettings.value) {
+
+        if (
+          settingsRes.status !== 'fulfilled' &&
+          supSettings.status === 'fulfilled' &&
+          supSettings.value
+        ) {
           setStoreSettings(prev => ({ ...prev, ...supSettings.value }));
         }
       }

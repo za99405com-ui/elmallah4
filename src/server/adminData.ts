@@ -142,7 +142,16 @@ function mapProduct(
     category: mapCategory(category?.slug, category?.name || p.categoryName),
     price: Number(p.price || 0),
     unit: p.pricingUnit === 'piece' ? 'قطعة' : 'كيلو',
-    inStock: Boolean(p.inStock) && Number(p.stockQuantity || 0) > 0,
+    inStock:
+      Boolean(p.inStock) &&
+      (
+        Number(p.stockQuantity || 0) > 0 ||
+        (p.variants || []).some(
+          (variant) =>
+            Boolean(variant.isActive) &&
+            Number(variant.stockQuantity || 0) > 0
+        )
+      ),
     isVisible: Boolean(p.isActive),
     sortOrder: Number(p.sortOrder || 0),
     image: p.imageUrl || '',
