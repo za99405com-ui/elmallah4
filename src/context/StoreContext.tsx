@@ -574,8 +574,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           maxDiscount: validated.maxDiscount,
           usageLimit: 0,
           usageCount: 0,
-          isActive: true,
-          createdAt: new Date().toISOString()
+          isActive: true
         };
         setAppliedCoupon(couponObj);
         setCouponError(null);

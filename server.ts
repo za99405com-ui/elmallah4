@@ -471,7 +471,7 @@ export async function createServer() {
     if (!supabase) return { status: 'error', message: 'عميل قاعدة البيانات غير متصل' };
 
     try {
-      const queries: Promise<any>[] = [];
+      const queries: Array<PromiseLike<any>> = [];
       if (customerId) {
         queries.push(
           supabase
