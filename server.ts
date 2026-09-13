@@ -18,6 +18,11 @@ import type {
   PaymentMethod 
 } from './src/types';
 import { getServerSupabase } from './src/server/supabaseAdmin';
+import {
+  fetchAdminProducts,
+  fetchAdminRegions,
+  fetchAdminSettings,
+} from './src/server/adminData';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -420,36 +425,58 @@ export async function createServer() {
   // ==========================================
 
   app.get('/api/products', async (req, res) => {
-    await ensureFreshServerData();
-    const { category, search, inStock } = req.query;
-    let result = products.filter(p => p.isVisible !== false);
+    try {
+      const { category, search, inStock } = req.query;
+      let result = await fetchAdminProducts();
 
-    if (category && category !== 'all') {
-      result = result.filter(p => p.category === category);
-    }
-    if (inStock === 'true') {
-      result = result.filter(p => p.inStock);
-    }
-    if (search && typeof search === 'string' && search.trim()) {
-      const q = search.trim().toLowerCase();
-      result = result.filter(p => 
-        p.name.toLowerCase().includes(q) || 
-        p.description.toLowerCase().includes(q) ||
-        (p.badgeText && p.badgeText.toLowerCase().includes(q))
-      );
-    }
+      if (category && category !== 'all') {
+        result = result.filter(p => p.category === category);
+      }
+      if (inStock === 'true') {
+        result = result.filter(p => p.inStock);
+      }
+      if (search && typeof search === 'string' && search.trim()) {
+        const q = search.trim().toLowerCase();
+        result = result.filter(p =>
+          p.name.toLowerCase().includes(q) ||
+          p.description.toLowerCase().includes(q) ||
+          (p.badgeText && p.badgeText.toLowerCase().includes(q))
+        );
+      }
 
-    result.sort((a, b) => (a.sortOrder || 99) - (b.sortOrder || 99));
-    res.json({ success: true, count: result.length, data: result });
+      result.sort((a, b) => (a.sortOrder || 99) - (b.sortOrder || 99));
+      return res.json({ success: true, count: result.length, data: result });
+    } catch (err) {
+      console.error('[Admin API] Failed to load products:', err);
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر تحميل المنتجات من نظام الإدارة حالياً',
+      });
+    }
   });
 
   app.get('/api/products/:id', async (req, res) => {
-    await ensureFreshServerData();
-    const product = products.find(p => p.id === req.params.id && p.isVisible !== false);
-    if (!product) {
-      return res.status(404).json({ success: false, error: 'المنتج غير موجود أو غير متاح' });
+    try {
+      const adminProducts = await fetchAdminProducts();
+      const product = adminProducts.find(
+        p => p.id === req.params.id && p.isVisible !== false
+      );
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          error: 'المنتج غير موجود أو غير متاح',
+        });
+      }
+
+      return res.json({ success: true, data: product });
+    } catch (err) {
+      console.error('[Admin API] Failed to load product:', err);
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر تحميل بيانات المنتج من نظام الإدارة حالياً',
+      });
     }
-    res.json({ success: true, data: product });
   });
 
   // ==========================================
@@ -1460,27 +1487,34 @@ export async function createServer() {
   // REGIONS & SETTINGS (Public Customer info)
   // ==========================================
 
-  app.get('/api/regions', async (req, res) => {
-    await ensureFreshServerData();
-    const active = regions.filter(r => r.isActive);
-    res.json({ success: true, count: active.length, data: active });
+  app.get('/api/regions', async (_req, res) => {
+    try {
+      const active = await fetchAdminRegions();
+      return res.json({
+        success: true,
+        count: active.length,
+        data: active,
+      });
+    } catch (err) {
+      console.error('[Admin API] Failed to load regions:', err);
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر تحميل مناطق التوصيل من نظام الإدارة حالياً',
+      });
+    }
   });
 
-  app.get('/api/settings', async (req, res) => {
-    await ensureFreshServerData();
-    const safeSettings: StoreSettings = {
-      cutoffHour: settings.cutoffHour,
-      cutoffMinute: settings.cutoffMinute,
-      isStoreOpen: settings.isStoreOpen,
-      minimumOrderAmount: settings.minimumOrderAmount,
-      whatsappNumber: settings.whatsappNumber,
-      instapayNumber: settings.instapayNumber,
-      vodafoneCashNumber: settings.vodafoneCashNumber,
-      defaultDepositType: settings.defaultDepositType,
-      defaultDepositValue: settings.defaultDepositValue,
-      allowCoupons: settings.allowCoupons
-    };
-    res.json({ success: true, data: safeSettings });
+  app.get('/api/settings', async (_req, res) => {
+    try {
+      const safeSettings = await fetchAdminSettings();
+      return res.json({ success: true, data: safeSettings });
+    } catch (err) {
+      console.error('[Admin API] Failed to load settings:', err);
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر تحميل إعدادات المتجر من نظام الإدارة حالياً',
+      });
+    }
   });
 
   // ==========================================
