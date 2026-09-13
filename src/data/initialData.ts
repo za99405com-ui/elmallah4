@@ -6,8 +6,8 @@ import {
   StoreSettings, 
   Coupon, 
   DeliveryRegion 
-} from '../types';
-import { getSupabase } from '../utils/supabase';
+} from '../types.js';
+import { getSupabase } from '../utils/supabase.js';
 
 // ==============================================================================
 // 1. Clean Category Definitions (Structure without mock records)
