@@ -1,0 +1,6 @@
+{
+  "name": "الملاح لبيع الأسماك",
+  "description": "متجر الملاح الإلكتروني لطلب وتوصيل الأسماك الطازجة صيد اليوم بسهولة وسرعة حتى باب منزلك.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
