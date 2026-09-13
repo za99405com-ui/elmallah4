@@ -532,8 +532,8 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Sync customer account if token is stored
       if (getStoredCustomerToken()) {
         const meRes = await api.getMe();
-        if (meRes.success && meRes.user) {
-          setCurrentUser(meRes.user);
+        if (meRes.success && meRes.customer) {
+          setCurrentUser(meRes.customer);
         }
       }
 
@@ -638,59 +638,6 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     depositPaid: number;
     depositTransactionRef?: string;
   }): Promise<Order> => {
-    const orderItems = cart.map(item => {
-      const unitPrice = item.variant ? item.variant.price : item.product.price;
-      return {
-        productId: item.product.id,
-        variantId: item.variant?.id,
-        variantLabel: item.variant?.label,
-        productName: item.product.name,
-        productImage: item.product.image,
-        unit: item.product.unit,
-        price: unitPrice,
-        quantity: item.quantity,
-        itemTotal: unitPrice * item.quantity,
-        piecesPerKiloRange: item.variant?.pieceCount ? `${item.variant.pieceCount} حبات للكيلو` : item.product.piecesPerKiloRange
-      };
-    });
-
-    const finalSubtotal = cartSubtotal;
-    const finalDelivery = currentDeliveryFee;
-    const finalDiscount = couponDiscount;
-    const finalTotal = Math.max(0, finalSubtotal + finalDelivery - finalDiscount);
-    const finalDepositReq = Math.min(finalTotal, cartDepositRequired);
-    const finalRemaining = Math.max(0, finalTotal - orderData.depositPaid);
-
-    const localOrder: Order = {
-      id: `ord-${Date.now()}`,
-      orderNumber: `#${Math.floor(1000 + Math.random() * 9000)}`,
-      deviceId: customerDeviceId,
-      customerId: currentUser?.id,
-      customerName: orderData.customerName,
-      customerPhone: orderData.customerPhone,
-      governorate: orderData.governorate,
-      city: orderData.city,
-      address: orderData.address,
-      notes: orderData.notes,
-      items: orderItems,
-      subtotal: finalSubtotal,
-      deliveryFee: finalDelivery,
-      discountAmount: finalDiscount,
-      couponCode: appliedCoupon?.code,
-      total: finalTotal,
-      paymentMethod: orderData.paymentMethod,
-      depositRequired: finalDepositReq,
-      depositPaid: orderData.depositPaid,
-      depositStatus: orderData.depositPaid > 0 ? 'pending' : 'none',
-      depositTransactionRef: orderData.depositTransactionRef,
-      remainingAmount: finalRemaining,
-      status: 'new',
-      createdAt: new Date().toISOString(),
-      deliveryTargetDate: cutoffInfo.isBeforeCutoff ? 'اليوم مبرد' : 'غداً مبرد',
-      isBeforeCutoff: cutoffInfo.isBeforeCutoff,
-      estimatedDeliveryTime: 'خلال 2-4 ساعات مبرد 🚚'
-    };
-
     // Prepare payload for authoritative backend validation & Supabase recording
     const payload: CreateOrderPayload = {
       items: cart.map(item => ({
@@ -713,19 +660,17 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       notes: orderData.notes
     };
 
-    let confirmedOrder = localOrder;
+    const serverRes = await api.createOrder(payload);
 
-    try {
-      const serverRes = await api.createOrder(payload);
-      if (serverRes.success && serverRes.data) {
-        confirmedOrder = {
-          ...serverRes.data,
-          deviceId: customerDeviceId
-        };
-      }
-    } catch (e) {
-      console.warn('Server order creation fallback to local:', e);
+    if (!serverRes || !serverRes.success || !serverRes.data) {
+      const errorMessage = serverRes?.error || 'تعذر تسجيل وتأكيد الطلب على الخادم. يرجى المحاولة مرة أخرى.';
+      throw new Error(errorMessage);
     }
+
+    const confirmedOrder: Order = {
+      ...serverRes.data,
+      deviceId: customerDeviceId
+    };
 
     setOrders(prev => [confirmedOrder, ...prev]);
     clearCart();

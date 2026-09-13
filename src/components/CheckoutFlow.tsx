@@ -473,6 +473,7 @@ export const CheckoutFlow: React.FC = React.memo(() => {
   // Completed order reference
   const [placedOrder, setPlacedOrder] = useState<Order | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [submitErrorMessage, setSubmitErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (currentRegion?.cities && currentRegion.cities.length > 0) {
@@ -548,6 +549,7 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     }
 
     setIsSubmitting(true);
+    setSubmitErrorMessage(null);
 
     try {
       const order = await createOrder({
@@ -577,8 +579,9 @@ export const CheckoutFlow: React.FC = React.memo(() => {
       }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Order placement failed:', err);
+      setSubmitErrorMessage(err?.message || 'تعذر تأكيد الطلب. يرجى مراجعة البيانات والمحاولة مرة أخرى.');
       setIsSubmitting(false);
     }
   }, [
@@ -925,6 +928,12 @@ export const CheckoutFlow: React.FC = React.memo(() => {
                 <span>{remainingUponDelivery} جنيه</span>
               </div>
             </div>
+
+            {submitErrorMessage && (
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl text-rose-700 dark:text-rose-300 text-xs font-semibold leading-relaxed">
+                {submitErrorMessage}
+              </div>
+            )}
 
             {/* Confirmation Button */}
             <button

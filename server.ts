@@ -235,13 +235,13 @@ export async function createServer() {
       });
     }
 
-    // Check & update IP rate limit: max 10 requests per 10 minutes
+    // Check & update IP rate limit: max 5 requests per 10 minutes
     const ipLimit = otpIpRateLimits.get(clientIp) || { count: 0, resetAt: now + 10 * 60 * 1000 };
     if (now > ipLimit.resetAt) {
       ipLimit.count = 0;
       ipLimit.resetAt = now + 10 * 60 * 1000;
     }
-    if (ipLimit.count >= 10) {
+    if (ipLimit.count >= 5) {
       const waitMinutes = Math.ceil((ipLimit.resetAt - now) / 60000);
       return res.status(429).json({ 
         success: false, 
@@ -498,7 +498,7 @@ export async function createServer() {
   // ==========================================
 
   // Unique Order Number Generator with bounded retries
-  async function generateUniqueOrderNumber(supabase: ReturnType<typeof getServerSupabase>): Promise<string> {
+  async function generateUniqueOrderNumber(supabase: ReturnType<typeof getServerSupabase>): Promise<string | null> {
     const maxAttempts = 10;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const entropy = crypto.randomInt(10000, 99999).toString();
@@ -512,19 +512,19 @@ export async function createServer() {
           const { data, error } = await supabase
             .from('orders')
             .select('id')
-            .eq('id', candidate)
+            .eq('order_number', candidate)
             .limit(1);
           if (!error && data && data.length > 0) {
             continue;
           }
         } catch {
-          // Proceed
+          // Proceed with local validation if network check fails
         }
       }
 
       return candidate;
     }
-    return `#ALM-${Date.now().toString().slice(-6)}`;
+    return null;
   }
 
   app.post('/api/orders', async (req, res) => {
@@ -761,6 +761,13 @@ export async function createServer() {
     // 8. GENERATE USER-FRIENDLY, COLLISION-RESISTANT ORDER NUMBER
     const supabaseAdmin = getServerSupabase();
     const orderNumber = await generateUniqueOrderNumber(supabaseAdmin);
+    if (!orderNumber) {
+      return res.status(500).json({
+        success: false,
+        error: 'تعذر توليد رقم طلب مميز وفريد حالياً. يرجى إعادة المحاولة خلال لحظات.'
+      });
+    }
+
     const orderId = `ord-${Date.now()}-${crypto.randomInt(100, 999)}`;
 
     const newOrder: Order = {
@@ -793,29 +800,79 @@ export async function createServer() {
       estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
     };
 
-    // 9. SAFE DURABLE PERSISTENCE
-    // If Supabase is configured, persistence MUST succeed before returning HTTP 201.
-    // If persistence fails, do NOT permanently add order to in-memory orders, return HTTP 500/503.
-    // If Supabase is NOT configured, clearly fail unless ALLOW_IN_MEMORY_ORDERS=true.
+    // 9. SAFE DURABLE PERSISTENCE (EXACT MATCH WITH supabase-schema.sql)
+    // Persists into `orders` first, then persists all verified items into `order_items`.
+    // If order_items fails, cleans up the inserted order and fails safely.
     if (supabaseAdmin) {
       try {
-        const { error: insertError } = await supabaseAdmin.from('orders').insert({
+        const orderRow = {
+          id: newOrder.id,
+          order_number: newOrder.orderNumber,
+          customer_id: newOrder.customerId || null,
           customer_name: newOrder.customerName,
-          phone: newOrder.customerPhone,
-          address: `${newOrder.governorate} - ${newOrder.city} - ${newOrder.address}`,
-          notes: newOrder.notes || '',
-          items: newOrder.items,
-          total_amount: newOrder.total,
-          deposit_amount: 0,
+          customer_phone: newOrder.customerPhone,
+          governorate: newOrder.governorate,
+          city: newOrder.city || null,
+          district: newOrder.district || null,
+          address: newOrder.address,
+          notes: newOrder.notes || null,
+          subtotal: newOrder.subtotal,
+          delivery_fee: newOrder.deliveryFee,
+          discount_amount: newOrder.discountAmount,
+          coupon_code: newOrder.couponCode || null,
+          total: newOrder.total,
           payment_method: newOrder.paymentMethod,
-          status: 'pending'
-        });
+          deposit_required: newOrder.depositRequired,
+          deposit_paid: newOrder.depositPaid,
+          deposit_status: newOrder.depositStatus,
+          deposit_transaction_ref: newOrder.depositTransactionRef || null,
+          remaining_amount: newOrder.remainingAmount,
+          status: newOrder.status,
+          created_at: newOrder.createdAt
+        };
 
-        if (insertError) {
-          console.error('[Order Persistence] Failed to persist order in Supabase');
+        const { error: orderInsertError } = await supabaseAdmin
+          .from('orders')
+          .insert(orderRow);
+
+        if (orderInsertError) {
+          console.error('[Order Persistence] Failed to persist order row in Supabase');
           return res.status(500).json({
             success: false,
             error: 'تعذر حفظ الطلب في قاعدة البيانات بشكل دائم. يرجى المحاولة لاحقاً أو التواصل هاتفياً مع المتجر.'
+          });
+        }
+
+        // Persist verified items into order_items matching supabase-schema.sql exactly
+        const orderItemRows = verifiedOrderItems.map(item => ({
+          order_id: newOrder.id,
+          product_id: item.productId,
+          variant_id: item.variantId || null,
+          product_name: item.productName,
+          variant_label: item.variantLabel || null,
+          price: item.price,
+          quantity: item.quantity,
+          item_total: item.itemTotal,
+          pieces_per_kilo_range: item.piecesPerKiloRange || null,
+          notes: item.notes || null
+        }));
+
+        const { error: itemsInsertError } = await supabaseAdmin
+          .from('order_items')
+          .insert(orderItemRows);
+
+        if (itemsInsertError) {
+          console.error('[Order Persistence] Failed to persist order items row in Supabase');
+          // Atomic cleanup: remove parent order if order_items failed
+          try {
+            await supabaseAdmin.from('orders').delete().eq('id', newOrder.id);
+          } catch (cleanupErr) {
+            console.error('[Order Persistence] Failed to clean up orphaned order after items insert failure');
+          }
+
+          return res.status(500).json({
+            success: false,
+            error: 'تعذر حفظ تفاصيل أصناف الطلب في قاعدة البيانات. يرجى إعادة المحاولة.'
           });
         }
       } catch (dbErr) {

@@ -21,14 +21,9 @@ function sanitizeSupabaseUrl(rawUrl: string | undefined): string | undefined {
 export function getSupabase(): SupabaseClient | null {
   if (publicSupabaseClient) return publicSupabaseClient;
 
-  // Use public client variables only
-  const rawUrl = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_URL : undefined) ||
-                 process.env.VITE_SUPABASE_URL ||
-                 process.env.SUPABASE_URL;
-
-  const anonKey = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_ANON_KEY : undefined) ||
-                  process.env.VITE_SUPABASE_ANON_KEY ||
-                  process.env.SUPABASE_ANON_KEY;
+  // Use public client variables only (VITE_*)
+  const rawUrl = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_URL : undefined;
+  const anonKey = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_ANON_KEY : undefined;
 
   const url = sanitizeSupabaseUrl(rawUrl);
 
