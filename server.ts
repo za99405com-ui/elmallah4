@@ -1604,15 +1604,19 @@ export async function createServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Customer Server] Running on port ${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[Customer Server] Running on port ${PORT}`);
+    });
+  }
 
   return app;
 }
 
-// Auto-start if run directly
-createServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// Auto-start locally / outside Vercel only
+if (!process.env.VERCEL) {
+  createServer().catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}
