@@ -19,9 +19,10 @@ import type {
   DeliveryRegion, 
   StoreSettings, 
   CustomerUser, 
-  CreateOrderPayload 
+  CreateOrderPayload,
+  PaymentMethod 
 } from './src/types';
-import { getSupabase } from './src/utils/supabase';
+import { getServerSupabase } from './src/server/supabaseAdmin';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,19 +46,19 @@ async function syncServerDataWithSupabase() {
 
     if (prodList.status === 'fulfilled' && prodList.value.length > 0) {
       products = prodList.value;
-      console.log(`✅ [Supabase] Loaded ${products.length} fresh products directly from Supabase`);
+      console.log(`[Supabase] Loaded ${products.length} products`);
     }
     if (couponList.status === 'fulfilled' && couponList.value.length > 0) {
       coupons = couponList.value;
-      console.log(`✅ [Supabase] Loaded ${coupons.length} coupons directly from Supabase`);
+      console.log(`[Supabase] Loaded ${coupons.length} coupons`);
     }
     if (regionList.status === 'fulfilled' && regionList.value.length > 0) {
       regions = regionList.value;
-      console.log(`✅ [Supabase] Loaded ${regions.length} delivery regions directly from Supabase`);
+      console.log(`[Supabase] Loaded ${regions.length} delivery regions`);
     }
     if (storeSettings.status === 'fulfilled' && storeSettings.value) {
       settings = { ...settings, ...storeSettings.value };
-      console.log(`✅ [Supabase] Loaded store settings directly from Supabase`);
+      console.log(`[Supabase] Loaded store settings`);
     }
   } catch (err) {
     console.warn('Notice loading Supabase tables on server startup:', err);
@@ -65,25 +66,24 @@ async function syncServerDataWithSupabase() {
 }
 
 // Customer Identity & Auth Store
+// TODO: Customer session persistence must move to a durable/auth-provider-based system (e.g. Supabase Auth / Redis / DB sessions) before multi-instance production deployment.
 let customers: CustomerUser[] = [];
 const activeCustomerSessions = new Map<string, { customerId: string; expiresAt: number; phone: string }>();
 const pendingOtps = new Map<string, { otp: string; expiresAt: number; attempts: number }>();
-const otpRequestRateLimits = new Map<string, { count: number; resetAt: number }>();
+const otpPhoneRateLimits = new Map<string, { count: number; resetAt: number }>();
+const otpIpRateLimits = new Map<string, { count: number; resetAt: number }>();
 
 // Helper: Normalize Egyptian Phone Numbers (010, 011, 012, 015)
 export function normalizeEgyptianPhone(input: string): string {
   if (!input) return '';
-  // Strip non-digits
   let digits = input.replace(/\D/g, '');
-  // Strip leading 002 or +2 or 2
   if (digits.startsWith('0020')) {
-    digits = digits.substring(3); // remove 002
+    digits = digits.substring(4);
   } else if (digits.startsWith('002')) {
     digits = digits.substring(3);
   } else if (digits.startsWith('20') && digits.length === 12) {
-    digits = digits.substring(1);
+    digits = digits.substring(2);
   }
-  // If starts with 1 and length 10, prepend 0
   if (digits.length === 10 && (digits.startsWith('10') || digits.startsWith('11') || digits.startsWith('12') || digits.startsWith('15'))) {
     digits = '0' + digits;
   }
@@ -108,6 +108,16 @@ setInterval(() => {
       pendingOtps.delete(phone);
     }
   }
+  for (const [phone, rate] of otpPhoneRateLimits.entries()) {
+    if (rate.resetAt <= now) {
+      otpPhoneRateLimits.delete(phone);
+    }
+  }
+  for (const [ip, rate] of otpIpRateLimits.entries()) {
+    if (rate.resetAt <= now) {
+      otpIpRateLimits.delete(ip);
+    }
+  }
 }, 60 * 1000);
 
 // Lazy-initialized Gemini AI Client
@@ -121,16 +131,29 @@ function getGeminiClient(): GoogleGenAI | null {
 
 export async function createServer() {
   const app = express();
-  const PORT = 3000;
+
+  // Validate Port: must be integer between 1 and 65535, fallback to 3000
+  const rawPort = process.env.PORT;
+  let parsedPort = 3000;
+  if (rawPort) {
+    const p = parseInt(rawPort, 10);
+    if (!isNaN(p) && p >= 1 && p <= 65535) {
+      parsedPort = p;
+    }
+  }
+  const PORT = parsedPort;
+
+  // Deliberate reverse proxy trust configuration
+  app.set('trust proxy', 1);
+
+  // Body limits: max 2mb to prevent unbounded payloads
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
   // Load fresh data directly from Supabase tables on startup
   await syncServerDataWithSupabase();
 
-  // Middleware
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
-
-  // Request logger for API routes
+  // Request logger for API routes (No sensitive bodies, tokens, or keys logged)
   app.use('/api', (req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
@@ -140,7 +163,7 @@ export async function createServer() {
     next();
   });
 
-  // Customer Authentication Middleware
+  // Customer Authentication Helper (Strictly from Bearer token)
   const getAuthenticatedCustomer = (req: express.Request): CustomerUser | null => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -156,15 +179,15 @@ export async function createServer() {
     return customer || null;
   };
 
-  // Health & Info Endpoint (Customer-facing, no admin data)
+  // Health & Info Endpoint (Customer-facing, no admin secrets)
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
       service: 'Al-Mallah Fresh Fish Customer Store Backend',
-      version: '3.0.0',
+      version: '3.1.0',
       timestamp: new Date().toISOString(),
       storeOpen: settings.isStoreOpen,
-      supabaseConnected: Boolean(getSupabase()),
+      supabaseConnected: Boolean(getServerSupabase()),
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
       stats: {
         productsCount: products.filter(p => p.isVisible).length,
@@ -176,12 +199,14 @@ export async function createServer() {
 
   // ==========================================
   // CUSTOMER PHONE AUTHENTICATION (Egyptian Mobile & OTP)
+  // Hardened: NEVER logs OTP, NEVER returns OTP in API responses
+  // Rate limited by phone AND req.ip
   // ==========================================
 
   // 1. Send OTP to Egyptian Mobile
   app.post('/api/auth/send-otp', (req, res) => {
     const { phone } = req.body;
-    if (!phone) {
+    if (!phone || typeof phone !== 'string') {
       return res.status(400).json({ success: false, error: 'يرجى إدخال رقم الهاتف' });
     }
 
@@ -193,25 +218,56 @@ export async function createServer() {
       });
     }
 
-    // Rate Limiting: Max 5 requests per 10 minutes per phone
+    const clientIp = req.ip || 'unknown-ip';
     const now = Date.now();
-    const rate = otpRequestRateLimits.get(normalized) || { count: 0, resetAt: now + 10 * 60 * 1000 };
-    if (now > rate.resetAt) {
-      rate.count = 0;
-      rate.resetAt = now + 10 * 60 * 1000;
+
+    // Check & update phone rate limit: max 5 requests per 10 minutes
+    const phoneLimit = otpPhoneRateLimits.get(normalized) || { count: 0, resetAt: now + 10 * 60 * 1000 };
+    if (now > phoneLimit.resetAt) {
+      phoneLimit.count = 0;
+      phoneLimit.resetAt = now + 10 * 60 * 1000;
     }
-    if (rate.count >= 5) {
-      const waitMinutes = Math.ceil((rate.resetAt - now) / 60000);
+    if (phoneLimit.count >= 5) {
+      const waitMinutes = Math.ceil((phoneLimit.resetAt - now) / 60000);
       return res.status(429).json({ 
         success: false, 
-        error: `تم تجاوز الحد الأقصى لمحاولات إرسال الرمز. يرجى الانتظار ${waitMinutes} دقيقة قبل المحاولة مرة أخرى.` 
+        error: `تم تجاوز الحد الأقصى لمحاولات إرسال الرمز لهذا الرقم. يرجى الانتظار ${waitMinutes} دقيقة.` 
       });
     }
-    rate.count += 1;
-    otpRequestRateLimits.set(normalized, rate);
 
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Check & update IP rate limit: max 10 requests per 10 minutes
+    const ipLimit = otpIpRateLimits.get(clientIp) || { count: 0, resetAt: now + 10 * 60 * 1000 };
+    if (now > ipLimit.resetAt) {
+      ipLimit.count = 0;
+      ipLimit.resetAt = now + 10 * 60 * 1000;
+    }
+    if (ipLimit.count >= 10) {
+      const waitMinutes = Math.ceil((ipLimit.resetAt - now) / 60000);
+      return res.status(429).json({ 
+        success: false, 
+        error: `تم تجاوز الحد الأقصى لمحاولات الإرسال من هذا الجهاز. يرجى الانتظار ${waitMinutes} دقيقة.` 
+      });
+    }
+
+    // Live SMS Gateway Check:
+    // If no real SMS gateway provider is configured in production, fail safely.
+    // Explicit server-only variable ENABLE_DEV_OTP=true allows simulated generation for dev testing.
+    const isDevOtpEnabled = process.env.ENABLE_DEV_OTP === 'true';
+
+    if (!isDevOtpEnabled) {
+      return res.status(503).json({
+        success: false,
+        error: 'خدمة إرسال رسائل التحقق (SMS) غير مهيأة في بيئة الإنتاج حالياً. يرجى التواصل هاتفياً أو عبر واتساب مع المتجر لإتمام طلبك.'
+      });
+    }
+
+    phoneLimit.count += 1;
+    otpPhoneRateLimits.set(normalized, phoneLimit);
+    ipLimit.count += 1;
+    otpIpRateLimits.set(clientIp, ipLimit);
+
+    // Generate cryptographically secure 6-digit OTP
+    const otp = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = now + 5 * 60 * 1000; // 5 minutes validity
 
     pendingOtps.set(normalized, {
@@ -220,22 +276,19 @@ export async function createServer() {
       attempts: 0
     });
 
-    console.log(`📱 [OTP Verification] Code for ${normalized}: ${otp}`);
-
+    // SECURITY: NEVER log the OTP value to console or files!
+    // SECURITY: NEVER return devOtp in the response!
     res.json({
       success: true,
-      message: `تم إرسال رمز التحقق إلى الرقم ${normalized}`,
-      phone: normalized,
-      expiresInSeconds: 300,
-      // Provide devOtp so that during testing or without live SMS gateway, verification is 100% functional
-      devOtp: otp
+      message: 'تم طلب إرسال رمز التحقق بنجاح إلى هاتفك المحمول',
+      expiresInSeconds: 300
     });
   });
 
   // 2. Verify OTP & Issue Customer Session
   app.post('/api/auth/verify-otp', (req, res) => {
     const { phone, otp, name, governorate, city, district, address } = req.body;
-    if (!phone || !otp) {
+    if (!phone || typeof phone !== 'string' || !otp) {
       return res.status(400).json({ success: false, error: 'رقم الهاتف وكود التحقق مطلوبان' });
     }
 
@@ -259,34 +312,33 @@ export async function createServer() {
       return res.status(400).json({ success: false, error: 'رمز التحقق غير صحيح. تأكد من الرمز وحاول مرة أخرى.' });
     }
 
-    // OTP Verified! Remove used OTP
+    // OTP Verified! Remove used OTP immediately
     pendingOtps.delete(normalized);
 
     // Find or create customer
     let customer = customers.find(c => c.phone === normalized);
     if (!customer) {
       customer = {
-        id: `cust_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`,
+        id: `cust_${Date.now()}_${crypto.randomInt(1000, 9999)}`,
         phone: normalized,
-        name: (name || '').trim() || `عميل الملاح (${normalized.slice(-4)})`,
-        governorate: (governorate || '').trim() || 'القاهرة',
-        city: (city || '').trim() || '',
-        district: (district || '').trim() || '',
-        address: (address || '').trim() || '',
+        name: typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : `عميل الملاح (${normalized.slice(-4)})`,
+        governorate: typeof governorate === 'string' && governorate.trim() ? governorate.trim().slice(0, 50) : 'القاهرة',
+        city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
+        district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
+        address: typeof address === 'string' ? address.trim().slice(0, 300) : '',
         createdAt: new Date().toISOString()
       };
       customers.push(customer);
     } else {
-      // Update info if supplied
-      if (name && name.trim()) customer.name = name.trim();
-      if (governorate && governorate.trim()) customer.governorate = governorate.trim();
-      if (city && city.trim()) customer.city = city.trim();
-      if (district && district.trim()) customer.district = district.trim();
-      if (address && address.trim()) customer.address = address.trim();
+      if (typeof name === 'string' && name.trim()) customer.name = name.trim().slice(0, 100);
+      if (typeof governorate === 'string' && governorate.trim()) customer.governorate = governorate.trim().slice(0, 50);
+      if (typeof city === 'string') customer.city = city.trim().slice(0, 100);
+      if (typeof district === 'string') customer.district = district.trim().slice(0, 100);
+      if (typeof address === 'string') customer.address = address.trim().slice(0, 300);
       customer.updatedAt = new Date().toISOString();
     }
 
-    // Generate Session Token (Valid 30 days)
+    // Generate Cryptographically Secure Session Token (Valid 30 days)
     const token = 'alm_c_' + crypto.randomBytes(32).toString('hex');
     const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
     const expiresAt = now + sessionDurationMs;
@@ -322,12 +374,12 @@ export async function createServer() {
     }
 
     const { name, governorate, city, district, address, notes } = req.body;
-    if (name && name.trim()) customer.name = name.trim();
-    if (governorate && governorate.trim()) customer.governorate = governorate.trim();
-    if (city && city.trim()) customer.city = city.trim();
-    if (district !== undefined) customer.district = (district || '').trim();
-    if (address && address.trim()) customer.address = address.trim();
-    if (notes !== undefined) customer.notes = (notes || '').trim();
+    if (typeof name === 'string' && name.trim()) customer.name = name.trim().slice(0, 100);
+    if (typeof governorate === 'string' && governorate.trim()) customer.governorate = governorate.trim().slice(0, 50);
+    if (typeof city === 'string') customer.city = city.trim().slice(0, 100);
+    if (typeof district === 'string') customer.district = district.trim().slice(0, 100);
+    if (typeof address === 'string') customer.address = address.trim().slice(0, 300);
+    if (typeof notes === 'string') customer.notes = notes.trim().slice(0, 500);
     customer.updatedAt = new Date().toISOString();
 
     res.json({ success: true, message: 'تم تحديث بياناتك بنجاح', customer });
@@ -344,23 +396,10 @@ export async function createServer() {
   });
 
   // ==========================================
-  // PRODUCTS API (With Variants / Selling Options)
+  // PRODUCTS API
   // ==========================================
 
-  // List products (Client facing - only visible products)
   app.get('/api/products', async (req, res) => {
-    // If Supabase is available, sync latest products
-    if (getSupabase()) {
-      try {
-        const fresh = await fetchProductsFromSupabase();
-        if (fresh && fresh.length > 0) {
-          products = fresh;
-        }
-      } catch (err) {
-        console.warn('Live fetch products notice:', err);
-      }
-    }
-
     const { category, search, inStock } = req.query;
     let result = products.filter(p => p.isVisible !== false);
 
@@ -383,7 +422,6 @@ export async function createServer() {
     res.json({ success: true, count: result.length, data: result });
   });
 
-  // Get single product with its selling variants
   app.get('/api/products/:id', (req, res) => {
     const product = products.find(p => p.id === req.params.id && p.isVisible !== false);
     if (!product) {
@@ -393,60 +431,56 @@ export async function createServer() {
   });
 
   // ==========================================
-  // CUSTOMER ORDERS API & IDOR PROTECTION
+  // CUSTOMER ORDERS API & IDOR HARDENING
+  // PRIVACY: Strictly requires authenticated customer session
+  // NEVER uses ?phone= for authorization
   // ==========================================
 
-  // Get My Orders: Strictly restricted to the authenticated customer's own orders
+  // A) GET /api/customer/orders: Strictly restricted to authenticated customer
   app.get('/api/customer/orders', (req, res) => {
     const customer = getAuthenticatedCustomer(req);
-    const { phone } = req.query;
-
-    let targetPhone = customer ? customer.phone : '';
-    let targetCustomerId = customer ? customer.id : '';
-
-    if (!targetCustomerId && phone && typeof phone === 'string') {
-      const norm = normalizeEgyptianPhone(phone);
-      if (isValidEgyptianPhone(norm)) {
-        targetPhone = norm;
-      }
+    if (!customer) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'غير مصرح: يرجى تسجيل الدخول لعرض قائمة طلباتك' 
+      });
     }
 
-    if (!targetCustomerId && !targetPhone) {
-      // Unauthenticated visitor with no verified phone sees only empty list (strict privacy)
-      return res.json({ success: true, count: 0, data: [] });
-    }
-
+    // Authorize ONLY by customer ID or trusted normalized phone from session
     const myOrders = orders.filter(o => {
-      if (targetCustomerId && o.customerId === targetCustomerId) return true;
-      if (targetPhone && o.customerPhone && normalizeEgyptianPhone(o.customerPhone) === targetPhone) return true;
-      return false;
+      const matchId = o.customerId && o.customerId === customer.id;
+      const matchPhone = o.customerPhone && normalizeEgyptianPhone(o.customerPhone) === customer.phone;
+      return matchId || matchPhone;
     });
 
     myOrders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     res.json({ success: true, count: myOrders.length, data: myOrders });
   });
 
-  // Get Single Order with strict IDOR prevention
+  // B) GET /api/orders/:id: Strictly authenticated and ownership-verified
   app.get('/api/orders/:id', (req, res) => {
-    const order = orders.find(o => o.id === req.params.id || o.orderNumber === req.params.id);
+    const customer = getAuthenticatedCustomer(req);
+    if (!customer) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'غير مصرح: يرجى تسجيل الدخول أولاً للوصول إلى تفاصيل الطلب' 
+      });
+    }
+
+    const orderId = req.params.id;
+    const order = orders.find(o => o.id === orderId || o.orderNumber === orderId);
+
+    // Return safe 404 if order does not exist OR if customer does not own it (IDOR protection)
     if (!order) {
       return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
 
-    const customer = getAuthenticatedCustomer(req);
-    const queryPhone = req.query.phone ? normalizeEgyptianPhone(String(req.query.phone)) : '';
-
-    // Verify ownership: customerId matches, or phone matches authenticated session or verified phone query
     const orderPhone = normalizeEgyptianPhone(order.customerPhone);
-    const isOwner = (customer && order.customerId === customer.id) ||
-                    (customer && orderPhone === customer.phone) ||
-                    (queryPhone && queryPhone === orderPhone);
+    const isOwner = (order.customerId && order.customerId === customer.id) || (orderPhone === customer.phone);
 
     if (!isOwner) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'غير مصرح: لا يمكنك الاطلاع على تفاصيل طلب لا يخصك لأسباب تتعلق بالخصوصية والأمان' 
-      });
+      // Safe 404: Never disclose whether another customer's order exists
+      return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
 
     res.json({ success: true, data: order });
@@ -454,41 +488,126 @@ export async function createServer() {
 
   // ==========================================
   // SECURE SERVER-AUTHORITATIVE CHECKOUT
-  // Do NOT trust any price, total, discount, or deposit from client!
+  // 1. Enforces store open status
+  // 2. Strict request validation (no NaN/Infinity/absurd values)
+  // 3. Read-only validation (NO stock or coupon mutation before durable success)
+  // 4. Authoritative delivery region and fee (no arbitrary fallback)
+  // 5. Untrusted client depositPaid completely ignored; calculated server-side
+  // 6. Safe persistence: Supabase must succeed before 201; or fail unless ALLOW_IN_MEMORY_ORDERS=true
+  // 7. Collision-resistant order number
   // ==========================================
+
+  // Unique Order Number Generator with bounded retries
+  async function generateUniqueOrderNumber(supabase: ReturnType<typeof getServerSupabase>): Promise<string> {
+    const maxAttempts = 10;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const entropy = crypto.randomInt(10000, 99999).toString();
+      const candidate = `#ALM-${entropy}`;
+
+      const existsLocally = orders.some(o => o.orderNumber === candidate);
+      if (existsLocally) continue;
+
+      if (supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('id', candidate)
+            .limit(1);
+          if (!error && data && data.length > 0) {
+            continue;
+          }
+        } catch {
+          // Proceed
+        }
+      }
+
+      return candidate;
+    }
+    return `#ALM-${Date.now().toString().slice(-6)}`;
+  }
+
   app.post('/api/orders', async (req, res) => {
+    // 1. STORE CLOSED ENFORCEMENT
+    if (settings.isStoreOpen === false) {
+      return res.status(403).json({
+        success: false,
+        error: 'المتجر مغلق حالياً ولا يستقبل طلبات جديدة في الوقت الحالي. يمكنك تصفح الأصناف وسنعاود استقبال الطلبات قريباً.'
+      });
+    }
+
     const payload: CreateOrderPayload = req.body;
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({ success: false, error: 'بيانات الطلب غير صالحة' });
+    }
+
     const { items, deliveryAddress, paymentMethod, depositTransactionRef, couponCode, notes } = payload;
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, error: 'سلة المشتريات فارغة' });
+    // 2. BASIC REQUEST VALIDATION
+    if (!items || !Array.isArray(items) || items.length === 0 || items.length > 50) {
+      return res.status(400).json({ success: false, error: 'سلة المشتريات فارغة أو تحتوي على عناصر غير صالحة' });
     }
 
-    if (!deliveryAddress || !deliveryAddress.customerPhone || !deliveryAddress.customerName || !deliveryAddress.governorate) {
-      return res.status(400).json({ success: false, error: 'بيانات التوصيل (الاسم، رقم الهاتف، والمحافظة) مطلوبة' });
+    if (!deliveryAddress || typeof deliveryAddress !== 'object') {
+      return res.status(400).json({ success: false, error: 'بيانات التوصيل مطلوبة' });
     }
 
-    const customerPhone = normalizeEgyptianPhone(deliveryAddress.customerPhone);
+    const { customerName, customerPhone: rawPhone, governorate, city, district, address } = deliveryAddress;
+
+    if (!customerName || typeof customerName !== 'string' || customerName.trim().length < 2 || customerName.trim().length > 100) {
+      return res.status(400).json({ success: false, error: 'يرجى إدخال اسم العميل بشكل صحيح (بين 2 و 100 حرف)' });
+    }
+
+    if (!rawPhone || typeof rawPhone !== 'string') {
+      return res.status(400).json({ success: false, error: 'رقم هاتف العميل مطلوب' });
+    }
+
+    const customerPhone = normalizeEgyptianPhone(rawPhone);
     if (!isValidEgyptianPhone(customerPhone)) {
-      return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف مصري صحيح للتواصل مع مندوب التوصيل' });
+      return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف محمول مصري صحيح (مثال: 01015192040)' });
     }
 
-    // Authenticate or find customer
+    if (!governorate || typeof governorate !== 'string' || governorate.trim().length < 2 || governorate.trim().length > 50) {
+      return res.status(400).json({ success: false, error: 'يرجى اختيار المحافظة بشكل صحيح' });
+    }
+
+    if (!address || typeof address !== 'string' || address.trim().length < 5 || address.trim().length > 300) {
+      return res.status(400).json({ success: false, error: 'يرجى كتابة العنوان بالتفصيل (بين 5 و 300 حرف)' });
+    }
+
+    // Payment Method Whitelist
+    const allowedPaymentMethods: PaymentMethod[] = ['cash_on_delivery', 'instapay', 'vodafone_cash'];
+    if (!paymentMethod || !allowedPaymentMethods.includes(paymentMethod)) {
+      return res.status(400).json({ success: false, error: 'طريقة الدفع المحددة غير مدعومة' });
+    }
+
+    // Bounded optional fields
+    const safeNotes = typeof notes === 'string' ? notes.trim().slice(0, 500) : '';
+    const safeCouponCode = typeof couponCode === 'string' ? couponCode.trim().slice(0, 30) : undefined;
+    const safeTransactionRef = typeof depositTransactionRef === 'string' ? depositTransactionRef.trim().slice(0, 100) : undefined;
+
+    // 3. CUSTOMER IDENTITY BINDING (Auth Session takes precedence)
     const authCustomer = getAuthenticatedCustomer(req);
-    let customerId = authCustomer ? authCustomer.id : '';
-    if (!customerId) {
-      const existing = customers.find(c => c.phone === customerPhone);
+    let customerId: string;
+    let verifiedPhone: string;
+
+    if (authCustomer) {
+      customerId = authCustomer.id;
+      verifiedPhone = authCustomer.phone; // Session phone is trusted
+    } else {
+      verifiedPhone = customerPhone;
+      const existing = customers.find(c => c.phone === verifiedPhone);
       if (existing) {
         customerId = existing.id;
       } else {
         const newCust: CustomerUser = {
-          id: `cust_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`,
-          phone: customerPhone,
-          name: deliveryAddress.customerName.trim(),
-          governorate: deliveryAddress.governorate.trim(),
-          city: deliveryAddress.city ? deliveryAddress.city.trim() : '',
-          district: deliveryAddress.district ? deliveryAddress.district.trim() : '',
-          address: deliveryAddress.address.trim(),
+          id: `cust_${Date.now()}_${crypto.randomInt(1000, 9999)}`,
+          phone: verifiedPhone,
+          name: customerName.trim(),
+          governorate: governorate.trim(),
+          city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
+          district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
+          address: address.trim(),
           createdAt: new Date().toISOString()
         };
         customers.push(newCust);
@@ -496,13 +615,29 @@ export async function createServer() {
       }
     }
 
-    // 1. Server-Side Item Verification & Pricing Calculation
+    // 4. READ-ONLY ITEM VALIDATION & PRICING
+    // Strictly NO stock mutations during validation
     let calculatedSubtotal = 0;
     const verifiedOrderItems: OrderItem[] = [];
 
     for (const item of items) {
+      if (!item || typeof item !== 'object') {
+        return res.status(400).json({ success: false, error: 'بيانات أحد المنتجات في السلة غير صالحة' });
+      }
+
+      if (!item.productId || typeof item.productId !== 'string' || item.productId.length > 100) {
+        return res.status(400).json({ success: false, error: 'معرف المنتج غير صالح' });
+      }
+
+      // Quantity validation: reject NaN, Infinity, negative, zero, and absurd numbers
+      const rawQty = item.quantity;
+      if (typeof rawQty !== 'number' || !Number.isFinite(rawQty) || rawQty <= 0 || rawQty > 100) {
+        return res.status(400).json({ success: false, error: `كمية غير صالحة للمنتج (${item.productId}). يجب أن تكون رقماً موجباً حتى 100.` });
+      }
+      const qty = Math.round(rawQty * 10) / 10;
+
       const product = products.find(p => p.id === item.productId);
-      if (!product || !product.isVisible) {
+      if (!product || product.isVisible === false) {
         return res.status(400).json({ success: false, error: `المنتج المختار غير متاح حالياً (${item.productId})` });
       }
 
@@ -510,23 +645,20 @@ export async function createServer() {
         return res.status(400).json({ success: false, error: `سمك ${product.name} غير متوفر في المخزون حالياً` });
       }
 
-      const qty = Math.max(1, Number(item.quantity) || 1);
-
-      // Check for variant
       let finalPrice = product.price;
       let variantLabel: string | undefined = undefined;
       let pieceRange = product.piecesPerKiloRange;
 
-      if (item.variantId && product.variants && product.variants.length > 0) {
-        const variant = product.variants.find(v => v.id === item.variantId);
-        if (variant && variant.isActive) {
-          finalPrice = variant.price;
-          variantLabel = variant.label;
-          pieceRange = `${variant.pieceCount} قطع تقريباً في الكيلو`;
-          
-          // Decrement variant stock
-          if (variant.stockQuantity > 0) {
-            variant.stockQuantity = Math.max(0, variant.stockQuantity - qty);
+      if (item.variantId) {
+        if (typeof item.variantId !== 'string' || item.variantId.length > 100) {
+          return res.status(400).json({ success: false, error: 'معرف خيار البيع غير صالح' });
+        }
+        if (product.variants && product.variants.length > 0) {
+          const variant = product.variants.find(v => v.id === item.variantId);
+          if (variant && variant.isActive) {
+            finalPrice = variant.price;
+            variantLabel = variant.label;
+            pieceRange = `${variant.pieceCount} قطع تقريباً في الكيلو`;
           }
         }
       }
@@ -541,25 +673,40 @@ export async function createServer() {
         productName: product.name,
         productImage: product.image,
         unit: product.unit,
-        price: finalPrice, // Verified Server Price!
+        price: finalPrice,
         quantity: qty,
         itemTotal,
         piecesPerKiloRange: pieceRange,
-        notes: item.notes
+        notes: typeof item.notes === 'string' ? item.notes.trim().slice(0, 200) : undefined
       });
     }
 
-    // 2. Delivery Region Verification & Fee Calculation
-    const region = regions.find(r => 
+    // 5. AUTHORITATIVE DELIVERY REGION & FEE
+    // Only allow delivery to a configured active region, reject safely otherwise
+    const matchingRegion = regions.find(r => 
       r.isActive && 
-      r.governorate.trim().toLowerCase() === deliveryAddress.governorate.trim().toLowerCase()
+      r.governorate.trim().toLowerCase() === governorate.trim().toLowerCase()
     );
-    const deliveryFee = region ? region.deliveryFee : 30;
 
-    if (region && region.minOrderAmount && calculatedSubtotal < region.minOrderAmount) {
+    if (!matchingRegion) {
       return res.status(400).json({
         success: false,
-        error: `الحد الأدنى للطلب في منطقة ${region.governorate} هو ${region.minOrderAmount} جنيه`
+        error: `عذراً، خدمة التوصيل غير متاحة حالياً لمحافظة ${governorate}. يرجى اختيار محافظة ضمن نطاق التوصيل المتاح.`
+      });
+    }
+
+    const deliveryFee = matchingRegion.deliveryFee;
+    if (typeof deliveryFee !== 'number' || !Number.isFinite(deliveryFee) || deliveryFee < 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'تعذر تحديد رسوم التوصيل لهذه المنطقة حالياً'
+      });
+    }
+
+    if (matchingRegion.minOrderAmount && calculatedSubtotal < matchingRegion.minOrderAmount) {
+      return res.status(400).json({
+        success: false,
+        error: `الحد الأدنى للطلب في منطقة ${matchingRegion.governorate} هو ${matchingRegion.minOrderAmount} جنيه`
       });
     }
 
@@ -570,12 +717,13 @@ export async function createServer() {
       });
     }
 
-    // 3. Server-Side Coupon Validation & Discount
+    // 6. READ-ONLY COUPON VALIDATION
+    // Strictly NO mutation of coupon usage before durable persistence success
     let discountAmount = 0;
     let validatedCouponCode: string | undefined = undefined;
 
-    if (couponCode && couponCode.trim()) {
-      const coupon = coupons.find(c => c.code.trim().toUpperCase() === couponCode.trim().toUpperCase() && c.isActive);
+    if (safeCouponCode) {
+      const coupon = coupons.find(c => c.code.trim().toUpperCase() === safeCouponCode.toUpperCase() && c.isActive);
       if (coupon) {
         const isEligible = !coupon.minOrderAmount || calculatedSubtotal >= coupon.minOrderAmount;
         const withinLimit = !coupon.usageLimit || coupon.usageCount < coupon.usageLimit;
@@ -587,52 +735,56 @@ export async function createServer() {
           } else {
             discountAmount = Math.min(coupon.discountValue, calculatedSubtotal);
           }
-          coupon.usageCount += 1;
           validatedCouponCode = coupon.code;
         }
       }
     }
 
-    // 4. Calculate Final Grand Total
+    // 7. FINAL TOTAL & UNTRUSTED DEPOSIT HARDENING
     const finalTotal = Math.max(0, calculatedSubtotal + deliveryFee - discountAmount);
 
-    // 5. Calculate Required Deposit based on Server Settings
     let depositRequired = 0;
-    if (settings.defaultDepositType === 'percentage') {
+    if (paymentMethod === 'cash_on_delivery') {
+      depositRequired = 0;
+    } else if (settings.defaultDepositType === 'percentage') {
       depositRequired = Math.round((finalTotal * (settings.defaultDepositValue || 20)) / 100);
     } else if (settings.defaultDepositType === 'fixed') {
       depositRequired = Math.min(settings.defaultDepositValue || 50, finalTotal);
     }
 
-    const isCashOnly = paymentMethod === 'cash_on_delivery';
-    const depositPaid = Number(payload.depositPaid) || (isCashOnly ? 0 : depositRequired);
-    const depositStatus = isCashOnly ? 'none' : (depositPaid > 0 ? 'pending' : 'none');
-    const remainingAmount = Math.max(0, finalTotal - depositPaid);
+    // CRITICAL: Treat depositPaid from client as UNTRUSTED and ignore it completely.
+    // Client cannot declare money as paid. Initial customer order is always depositPaid = 0.
+    const initialDepositPaid = 0;
+    const initialDepositStatus = (paymentMethod === 'cash_on_delivery' || depositRequired === 0) ? 'none' : 'pending';
+    const remainingAmount = finalTotal;
 
-    // Generate Order Number
-    const orderNum = Math.floor(1000 + Math.random() * 9000);
+    // 8. GENERATE USER-FRIENDLY, COLLISION-RESISTANT ORDER NUMBER
+    const supabaseAdmin = getServerSupabase();
+    const orderNumber = await generateUniqueOrderNumber(supabaseAdmin);
+    const orderId = `ord-${Date.now()}-${crypto.randomInt(100, 999)}`;
+
     const newOrder: Order = {
-      id: `ord-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
-      orderNumber: `#${orderNum}`,
+      id: orderId,
+      orderNumber,
       customerId,
-      customerName: deliveryAddress.customerName.trim(),
-      customerPhone,
-      governorate: deliveryAddress.governorate.trim(),
-      city: deliveryAddress.city ? deliveryAddress.city.trim() : '',
-      district: deliveryAddress.district ? deliveryAddress.district.trim() : '',
-      address: deliveryAddress.address.trim(),
-      notes: notes || '',
+      customerName: customerName.trim(),
+      customerPhone: verifiedPhone,
+      governorate: governorate.trim(),
+      city: typeof city === 'string' ? city.trim() : '',
+      district: typeof district === 'string' ? district.trim() : '',
+      address: address.trim(),
+      notes: safeNotes,
       items: verifiedOrderItems,
       subtotal: calculatedSubtotal,
       deliveryFee,
       discountAmount,
       couponCode: validatedCouponCode,
       total: finalTotal,
-      paymentMethod: paymentMethod || 'instapay',
+      paymentMethod,
       depositRequired,
-      depositPaid,
-      depositStatus,
-      depositTransactionRef: depositTransactionRef || undefined,
+      depositPaid: initialDepositPaid,
+      depositStatus: initialDepositStatus,
+      depositTransactionRef: safeTransactionRef,
       remainingAmount,
       status: 'new',
       createdAt: new Date().toISOString(),
@@ -641,27 +793,50 @@ export async function createServer() {
       estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
     };
 
-    orders.unshift(newOrder);
-
-    // Sync to Supabase if connected
-    const supabase = getSupabase();
-    if (supabase) {
+    // 9. SAFE DURABLE PERSISTENCE
+    // If Supabase is configured, persistence MUST succeed before returning HTTP 201.
+    // If persistence fails, do NOT permanently add order to in-memory orders, return HTTP 500/503.
+    // If Supabase is NOT configured, clearly fail unless ALLOW_IN_MEMORY_ORDERS=true.
+    if (supabaseAdmin) {
       try {
-        await supabase.from('orders').insert({
+        const { error: insertError } = await supabaseAdmin.from('orders').insert({
           customer_name: newOrder.customerName,
           phone: newOrder.customerPhone,
           address: `${newOrder.governorate} - ${newOrder.city} - ${newOrder.address}`,
           notes: newOrder.notes || '',
           items: newOrder.items,
           total_amount: newOrder.total,
-          deposit_amount: newOrder.depositPaid || newOrder.depositRequired || 0,
+          deposit_amount: 0,
           payment_method: newOrder.paymentMethod,
           status: 'pending'
         });
-      } catch (err) {
-        console.warn('Supabase order insert notice:', err);
+
+        if (insertError) {
+          console.error('[Order Persistence] Failed to persist order in Supabase');
+          return res.status(500).json({
+            success: false,
+            error: 'تعذر حفظ الطلب في قاعدة البيانات بشكل دائم. يرجى المحاولة لاحقاً أو التواصل هاتفياً مع المتجر.'
+          });
+        }
+      } catch (dbErr) {
+        console.error('[Order Persistence] Exception during durable database insert');
+        return res.status(500).json({
+          success: false,
+          error: 'حدث خطأ أثناء معالجة وحفظ الطلب. يرجى إعادة المحاولة.'
+        });
+      }
+    } else {
+      const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
+      if (!allowInMemory) {
+        return res.status(503).json({
+          success: false,
+          error: 'خدمة تسجيل الطلبات الدائمة غير مهيأة حالياً في الخادم. يرجى التواصل مع المتجر مباشرة لتأكيد طلبك.'
+        });
       }
     }
+
+    // Success: add to memory store for active runtime tracking
+    orders.unshift(newOrder);
 
     res.status(201).json({
       success: true,
@@ -676,7 +851,7 @@ export async function createServer() {
 
   app.post('/api/coupons/validate', (req, res) => {
     const { code, cartTotal } = req.body;
-    if (!code) {
+    if (!code || typeof code !== 'string') {
       return res.status(400).json({ success: false, error: 'يرجى إدخال كود الكوبون' });
     }
 
@@ -689,7 +864,9 @@ export async function createServer() {
       return res.status(400).json({ success: false, error: 'هذا الكوبون غير مفعّل حالياً' });
     }
 
-    const total = Number(cartTotal) || 0;
+    const rawTotal = Number(cartTotal);
+    const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0;
+
     if (coupon.minOrderAmount && total < coupon.minOrderAmount) {
       return res.status(400).json({ 
         success: false, 
@@ -727,34 +904,12 @@ export async function createServer() {
   // REGIONS & SETTINGS (Public Customer info)
   // ==========================================
 
-  app.get('/api/regions', async (req, res) => {
-    if (getSupabase()) {
-      try {
-        const fresh = await fetchDeliveryRegionsFromSupabase();
-        if (fresh && fresh.length > 0) {
-          regions = fresh;
-        }
-      } catch (err) {
-        console.warn('Live fetch regions notice:', err);
-      }
-    }
+  app.get('/api/regions', (req, res) => {
     const active = regions.filter(r => r.isActive);
     res.json({ success: true, count: active.length, data: active });
   });
 
-  app.get('/api/settings', async (req, res) => {
-    if (getSupabase()) {
-      try {
-        const fresh = await fetchStoreSettingsFromSupabase();
-        if (fresh) {
-          settings = { ...settings, ...fresh };
-        }
-      } catch (err) {
-        console.warn('Live fetch settings notice:', err);
-      }
-    }
-
-    // Return customer-safe store settings
+  app.get('/api/settings', (req, res) => {
     const safeSettings: StoreSettings = {
       cutoffHour: settings.cutoffHour,
       cutoffMinute: settings.cutoffMinute,
@@ -771,7 +926,7 @@ export async function createServer() {
   });
 
   // ==========================================
-  // GEMINI AI ASSISTANT API (Fish recipes & help)
+  // GEMINI AI ASSISTANT API (Fish recipes & cooking advice)
   // ==========================================
 
   app.post('/api/ai/assistant', async (req, res) => {
@@ -782,18 +937,18 @@ export async function createServer() {
       if (!ai) {
         return res.json({
           success: true,
-          answer: `🐟 **نصيحة شيف متجر الملاح:**
-للحصول على أفضل طعم لأسماك ${fishType || 'البحر الطازجة'}:
-1. **التنظيف:** غسيل السمك بالماء البارد والليمون وقليل من الكمون دون نقع طويل في الخل للحفاظ على تماسك اللحم.
-2. **التسوية:** الشوي بالردة على نار عالية أو سنجاري بالفرن مع البصل والطماطم والكزبرة والفلفل الحار والليمون وزيت الزيتون.
-3. **التوصيل المبرد:** ننصح بالطلب قبل الساعة 3:00 فجراً لضمان وصول صيد الفجر طازج ومبرد في نفس اليوم! 🚚`
+          answer: `🐟 **نصيحة شيف متجر الملاح:**\nللحصول على أفضل طعم لأسماك ${fishType || 'البحر الطازجة'}:\n1. **التنظيف:** غسيل السمك بالماء البارد والليمون وقليل من الكمون دون نقع طويل في الخل للحفاظ على تماسك اللحم.\n2. **التسوية:** الشوي بالردة على نار عالية أو سنجاري بالفرن مع البصل والطماطم والكزبرة والفلفل الحار والليمون وزيت الزيتون.\n3. **التوصيل المبرد:** ننصح بالطلب قبل الساعة 3:00 فجراً لضمان وصول صيد الفجر طازج ومبرد في نفس اليوم! 🚚`
         });
       }
 
+      const safeQuestion = typeof question === 'string' ? question.slice(0, 300) : '';
+      const safeFish = typeof fishType === 'string' ? fishType.slice(0, 100) : 'البحر الطازجة';
+      const safeOccasion = typeof occasion === 'string' ? occasion.slice(0, 100) : 'عائلي';
+
       const prompt = `أنت شيف أسماك ومستشار متخصص في متجر "الملاح لبيع الأسماك الطازجة" في مصر.
 أجب العميل بلباقة واحترافية باللغة العربية مع لمسة ودودة وأسلوب مصري راقي ومختصر ومفيد.
-السؤال أو الطلب: "${question || `أفضل طريقة لتحضير وتتبيل سمك ${fishType}`}"
-المناسبة أو عدد الأفراد: "${occasion || 'عائلي'}"
+السؤال أو الطلب: "${safeQuestion || `أفضل طريقة لتحضير وتتبيل سمك ${safeFish}`}"
+المناسبة أو عدد الأفراد: "${safeOccasion}"
 
 قدّم نصائح عن:
 1. أنسب طريقة طهي (مشوي، سنجاري، زيت وليمون، طاجن، مقلي).
@@ -802,7 +957,7 @@ export async function createServer() {
 اجعل الإجابة منسقة بنقاط واضحة وجميلة.`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
+        model: 'gemini-2.5-flash',
         contents: prompt
       });
 
@@ -811,7 +966,7 @@ export async function createServer() {
         answer: response.text || 'أهلاً بك في متجر الملاح للأسماك الطازجة صيد اليوم!'
       });
     } catch (error: any) {
-      console.error('Gemini AI Assistant error:', error);
+      console.error('Gemini AI Assistant error notice');
       res.status(500).json({
         success: false,
         error: 'حدث خطأ أثناء معالجة الطلب عبر المساعد الذكي'
@@ -839,7 +994,7 @@ export async function createServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🐟 Al-Mallah Customer Store Server running on http://0.0.0.0:${PORT}`);
+    console.log(`[Customer Server] Running on port ${PORT}`);
   });
 
   return app;

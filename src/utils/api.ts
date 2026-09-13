@@ -218,10 +218,9 @@ export const api = {
     }
   },
 
-  async getMyOrders(phone?: string): Promise<{ success: boolean; count?: number; data: Order[] }> {
+  async getMyOrders(): Promise<{ success: boolean; count?: number; data: Order[] }> {
     try {
-      const query = phone ? `?phone=${encodeURIComponent(phone)}` : '';
-      const res = await fetch(`${API_BASE}/customer/orders${query}`, {
+      const res = await fetch(`${API_BASE}/customer/orders`, {
         headers: getCustomerAuthHeaders()
       });
       return await res.json();
@@ -230,10 +229,9 @@ export const api = {
     }
   },
 
-  async getOrder(id: string, phone?: string): Promise<{ success: boolean; data?: Order; error?: string }> {
+  async getOrder(id: string): Promise<{ success: boolean; data?: Order; error?: string }> {
     try {
-      const query = phone ? `?phone=${encodeURIComponent(phone)}` : '';
-      const res = await fetch(`${API_BASE}/orders/${id}${query}`, {
+      const res = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}`, {
         headers: getCustomerAuthHeaders()
       });
       return await res.json();

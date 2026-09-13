@@ -105,7 +105,7 @@ interface StoreContextType {
   registerUser: (user: Omit<CustomerUser, 'id' | 'createdAt'>) => void;
   logoutUser: () => Promise<void>;
   updateUserAccount: (data: Partial<CustomerUser>) => Promise<void>;
-  sendOtp: (phone: string) => Promise<{ success: boolean; message?: string; error?: string; devOtp?: string }>;
+  sendOtp: (phone: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   verifyOtp: (payload: { phone: string; otp: string; name?: string; governorate?: string; city?: string; district?: string; address?: string }) => Promise<{ success: boolean; customer?: CustomerUser; error?: string }>;
 
   // Backend Connection & AI Chef Assistant
@@ -474,15 +474,15 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const refreshOrders = useCallback(async () => {
     try {
-      const phoneParam = currentUser?.phone;
-      const res = await api.getMyOrders(phoneParam);
-      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+      if (!currentUser) return;
+      const res = await api.getMyOrders();
+      if (res.success && Array.isArray(res.data)) {
         setOrders(res.data);
       }
     } catch (err) {
       console.warn('Orders refresh notice:', err);
     }
-  }, [currentUser?.phone]);
+  }, [currentUser]);
 
   const syncBackend = useCallback(async () => {
     setIsLoadingData(true);

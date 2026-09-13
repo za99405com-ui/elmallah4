@@ -1,39 +1,48 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Lazy-initialized Supabase Client
-let supabaseClient: SupabaseClient | null = null;
+/**
+ * PUBLIC / BROWSER Supabase Client
+ * 
+ * SECURITY RULES:
+ * 1. Uses public anonymous keys only (VITE_SUPABASE_ANON_KEY / SUPABASE_ANON_KEY).
+ * 2. NEVER references or falls back to SUPABASE_SERVICE_ROLE_KEY.
+ * 3. Safe to be bundled into the client-side application.
+ */
+let publicSupabaseClient: SupabaseClient | null = null;
 
 function sanitizeSupabaseUrl(rawUrl: string | undefined): string | undefined {
   if (!rawUrl) return undefined;
   let cleaned = rawUrl.trim();
-  // Strip trailing /rest/v1 or /rest/v1/ if user or env configured the REST endpoint directly
   cleaned = cleaned.replace(/\/rest\/v1\/?$/i, '');
-  // Strip trailing slashes
   cleaned = cleaned.replace(/\/+$/, '');
   return cleaned;
 }
 
 export function getSupabase(): SupabaseClient | null {
-  if (supabaseClient) return supabaseClient;
+  if (publicSupabaseClient) return publicSupabaseClient;
 
-  const rawUrl = process.env.SUPABASE_URL || (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_URL : undefined);
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || 
-              process.env.SUPABASE_ANON_KEY || 
-              (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_ANON_KEY : undefined);
+  // Use public client variables only
+  const rawUrl = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_URL : undefined) ||
+                 process.env.VITE_SUPABASE_URL ||
+                 process.env.SUPABASE_URL;
+
+  const anonKey = (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_ANON_KEY : undefined) ||
+                  process.env.VITE_SUPABASE_ANON_KEY ||
+                  process.env.SUPABASE_ANON_KEY;
 
   const url = sanitizeSupabaseUrl(rawUrl);
 
-  if (url && key && url !== 'https://your-project.supabase.co' && (url.startsWith('http://') || url.startsWith('https://'))) {
+  if (url && anonKey && url !== 'https://your-project.supabase.co' && (url.startsWith('http://') || url.startsWith('https://'))) {
     try {
-      supabaseClient = createClient(url, key, {
+      publicSupabaseClient = createClient(url, anonKey, {
         auth: {
           persistSession: false
         }
       });
-      console.log('✅ Supabase client successfully initialized for El-Mallah Seafood at', url);
     } catch (e) {
-      console.warn('⚠️ Failed to initialize Supabase client:', e);
+      console.warn('⚠️ Public Supabase client initialization notice:', e);
     }
   }
-  return supabaseClient;
+  return publicSupabaseClient;
 }
+
