@@ -443,35 +443,6 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
-  const loadDirectFromSupabase = useCallback(async () => {
-    setIsLoadingData(true);
-    try {
-      const [supProducts, supRegions, supSettings, supCoupons] = await Promise.allSettled([
-        fetchProductsFromSupabase(),
-        fetchDeliveryRegionsFromSupabase(),
-        fetchStoreSettingsFromSupabase(),
-        fetchCouponsFromSupabase()
-      ]);
-
-      if (supProducts.status === 'fulfilled' && supProducts.value.length > 0) {
-        setProducts(supProducts.value);
-      }
-      if (supRegions.status === 'fulfilled' && supRegions.value.length > 0) {
-        setRegions(supRegions.value);
-      }
-      if (supSettings.status === 'fulfilled' && supSettings.value) {
-        setStoreSettings(prev => ({ ...prev, ...supSettings.value }));
-      }
-      if (supCoupons.status === 'fulfilled' && supCoupons.value.length > 0) {
-        setCoupons(supCoupons.value);
-      }
-    } catch (err) {
-      console.warn('Direct Supabase sync notice:', err);
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, []);
-
   const refreshOrders = useCallback(async () => {
     try {
       if (!currentUser) return;
@@ -487,46 +458,47 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const syncBackend = useCallback(async () => {
     setIsLoadingData(true);
     try {
-      // 1. Direct Supabase data fetch on app load
-      let hasSupabaseData = false;
-      const [supProducts, supRegions, supSettings, supCoupons] = await Promise.allSettled([
-        fetchProductsFromSupabase(),
-        fetchDeliveryRegionsFromSupabase(),
-        fetchStoreSettingsFromSupabase(),
-        fetchCouponsFromSupabase()
-      ]);
-
-      if (supProducts.status === 'fulfilled' && supProducts.value.length > 0) {
-        setProducts(supProducts.value);
-        hasSupabaseData = true;
-      }
-      if (supRegions.status === 'fulfilled' && supRegions.value.length > 0) {
-        setRegions(supRegions.value);
-      }
-      if (supSettings.status === 'fulfilled' && supSettings.value) {
-        setStoreSettings(prev => ({ ...prev, ...supSettings.value }));
-      }
-      if (supCoupons.status === 'fulfilled' && supCoupons.value.length > 0) {
-        setCoupons(supCoupons.value);
-      }
-
-      // 2. Query backend API
+      // 1. Query backend API as primary authoritative source
       const [productsRes, regionsRes, settingsRes] = await Promise.allSettled([
         api.getProducts(),
         api.getRegions(),
         api.getSettings()
       ]);
 
-      setBackendConnected(true);
-
-      if (!hasSupabaseData && productsRes.status === 'fulfilled' && productsRes.value?.success && productsRes.value.data?.length > 0) {
+      let backendProvidedProducts = false;
+      if (productsRes.status === 'fulfilled' && productsRes.value?.success && productsRes.value.data?.length > 0) {
         setProducts(productsRes.value.data);
+        backendProvidedProducts = true;
+        setBackendConnected(true);
       }
       if (regionsRes.status === 'fulfilled' && regionsRes.value?.success && regionsRes.value.data?.length > 0) {
         setRegions(regionsRes.value.data);
       }
       if (settingsRes.status === 'fulfilled' && settingsRes.value?.success && settingsRes.value.data) {
         setStoreSettings(prev => ({ ...prev, ...settingsRes.value.data }));
+      }
+
+      // 2. Fallback to direct client Supabase ONLY if backend returned no products or failed
+      if (!backendProvidedProducts) {
+        const [supProducts, supRegions, supSettings, supCoupons] = await Promise.allSettled([
+          fetchProductsFromSupabase(),
+          fetchDeliveryRegionsFromSupabase(),
+          fetchStoreSettingsFromSupabase(),
+          fetchCouponsFromSupabase()
+        ]);
+
+        if (supProducts.status === 'fulfilled' && supProducts.value.length > 0) {
+          setProducts(supProducts.value);
+        }
+        if (regionsRes.status !== 'fulfilled' && supRegions.status === 'fulfilled' && supRegions.value.length > 0) {
+          setRegions(supRegions.value);
+        }
+        if (settingsRes.status !== 'fulfilled' && supSettings.status === 'fulfilled' && supSettings.value) {
+          setStoreSettings(prev => ({ ...prev, ...supSettings.value }));
+        }
+        if (supCoupons.status === 'fulfilled' && supCoupons.value.length > 0) {
+          setCoupons(supCoupons.value);
+        }
       }
 
       // Sync customer account if token is stored
@@ -545,6 +517,10 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setIsLoadingData(false);
     }
   }, [refreshOrders]);
+
+  const loadDirectFromSupabase = useCallback(async () => {
+    await syncBackend();
+  }, [syncBackend]);
 
   useEffect(() => {
     syncBackend();

@@ -3,13 +3,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { 
-  fetchProductsFromSupabase,
-  fetchCouponsFromSupabase,
-  fetchDeliveryRegionsFromSupabase,
-  fetchStoreSettingsFromSupabase,
-  INITIAL_SETTINGS 
-} from './src/data/initialData';
+import { INITIAL_SETTINGS } from './src/data/initialData';
+import { syncAllServerData } from './src/server/serverData';
 import type { 
   Product, 
   ProductVariant, 
@@ -27,38 +22,32 @@ import { getServerSupabase } from './src/server/supabaseAdmin';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Server Data Store (Directly loaded from Supabase, NO mock records)
+// Server Data Store (Directly loaded from Supabase via server client, NO mock records)
 let products: Product[] = [];
 let orders: Order[] = [];
 let coupons: Coupon[] = [];
 let regions: DeliveryRegion[] = [];
 let settings: StoreSettings = { ...INITIAL_SETTINGS };
 
-// Load data directly from Supabase tables
+// Load data directly from Supabase tables using server-only service-role client
 async function syncServerDataWithSupabase() {
   try {
-    const [prodList, couponList, regionList, storeSettings] = await Promise.allSettled([
-      fetchProductsFromSupabase(),
-      fetchCouponsFromSupabase(),
-      fetchDeliveryRegionsFromSupabase(),
-      fetchStoreSettingsFromSupabase()
-    ]);
-
-    if (prodList.status === 'fulfilled' && prodList.value.length > 0) {
-      products = prodList.value;
-      console.log(`[Supabase] Loaded ${products.length} products`);
+    const synced = await syncAllServerData();
+    if (synced.products.length > 0) {
+      products = synced.products;
+      console.log(`[Server Supabase] Loaded ${products.length} products`);
     }
-    if (couponList.status === 'fulfilled' && couponList.value.length > 0) {
-      coupons = couponList.value;
-      console.log(`[Supabase] Loaded ${coupons.length} coupons`);
+    if (synced.coupons.length > 0) {
+      coupons = synced.coupons;
+      console.log(`[Server Supabase] Loaded ${coupons.length} coupons`);
     }
-    if (regionList.status === 'fulfilled' && regionList.value.length > 0) {
-      regions = regionList.value;
-      console.log(`[Supabase] Loaded ${regions.length} delivery regions`);
+    if (synced.regions.length > 0) {
+      regions = synced.regions;
+      console.log(`[Server Supabase] Loaded ${regions.length} delivery regions`);
     }
-    if (storeSettings.status === 'fulfilled' && storeSettings.value) {
-      settings = { ...settings, ...storeSettings.value };
-      console.log(`[Supabase] Loaded store settings`);
+    if (synced.settings) {
+      settings = { ...settings, ...synced.settings };
+      console.log(`[Server Supabase] Loaded store settings`);
     }
   } catch (err) {
     console.warn('Notice loading Supabase tables on server startup:', err);
@@ -436,8 +425,178 @@ export async function createServer() {
   // NEVER uses ?phone= for authorization
   // ==========================================
 
+  // Durable Supabase order fetcher for customer orders
+  async function fetchOrdersFromSupabaseForCustomer(
+    supabase: ReturnType<typeof getServerSupabase>,
+    customerId?: string,
+    customerPhone?: string
+  ): Promise<Order[] | null> {
+    if (!supabase) return null;
+
+    try {
+      let query = supabase.from('orders').select('*');
+      if (customerId && customerPhone) {
+        query = query.or(`customer_id.eq.${customerId},customer_phone.eq.${customerPhone}`);
+      } else if (customerId) {
+        query = query.eq('customer_id', customerId);
+      } else if (customerPhone) {
+        query = query.eq('customer_phone', customerPhone);
+      } else {
+        return [];
+      }
+
+      const { data: orderRows, error: ordersErr } = await query.order('created_at', { ascending: false });
+      if (ordersErr) {
+        console.warn('[Orders Read] Supabase orders query error:', ordersErr);
+        return null;
+      }
+
+      if (!orderRows || orderRows.length === 0) {
+        return [];
+      }
+
+      const orderIds = orderRows.map((r: any) => r.id);
+      const { data: itemRows, error: itemsErr } = await supabase
+        .from('order_items')
+        .select('*')
+        .in('order_id', orderIds);
+
+      const itemsByOrder: Record<string, OrderItem[]> = {};
+      if (!itemsErr && itemRows) {
+        for (const item of itemRows) {
+          if (!itemsByOrder[item.order_id]) {
+            itemsByOrder[item.order_id] = [];
+          }
+          const matchedProd = products.find(p => p.id === item.product_id);
+          itemsByOrder[item.order_id].push({
+            productId: item.product_id,
+            variantId: item.variant_id || undefined,
+            productName: item.product_name,
+            productImage: matchedProd?.image || '',
+            unit: matchedProd?.unit || 'كيلو',
+            variantLabel: item.variant_label || undefined,
+            price: Number(item.price),
+            quantity: Number(item.quantity),
+            itemTotal: Number(item.item_total),
+            piecesPerKiloRange: item.pieces_per_kilo_range || undefined,
+            notes: item.notes || undefined
+          });
+        }
+      }
+
+      return orderRows.map((r: any): Order => ({
+        id: String(r.id),
+        orderNumber: r.order_number,
+        customerId: r.customer_id || undefined,
+        customerName: r.customer_name,
+        customerPhone: r.customer_phone,
+        governorate: r.governorate,
+        city: r.city || '',
+        district: r.district || '',
+        address: r.address,
+        notes: r.notes || '',
+        items: itemsByOrder[r.id] || [],
+        subtotal: Number(r.subtotal),
+        deliveryFee: Number(r.delivery_fee || 0),
+        discountAmount: Number(r.discount_amount || 0),
+        couponCode: r.coupon_code || undefined,
+        total: Number(r.total),
+        paymentMethod: r.payment_method,
+        depositRequired: Number(r.deposit_required || 0),
+        depositPaid: Number(r.deposit_paid || 0),
+        depositStatus: r.deposit_status || 'none',
+        depositTransactionRef: r.deposit_transaction_ref || undefined,
+        remainingAmount: Number(r.remaining_amount || 0),
+        status: r.status || 'new',
+        createdAt: r.created_at,
+        deliveryTargetDate: 'نفس اليوم مبرد 🚚',
+        isBeforeCutoff: true,
+        estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
+      }));
+    } catch (err) {
+      console.warn('[Orders Read] Supabase orders query exception:', err);
+      return null;
+    }
+  }
+
+  // Durable Supabase fetcher for single order
+  async function fetchSingleOrderFromSupabase(
+    supabase: ReturnType<typeof getServerSupabase>,
+    orderIdOrNumber: string
+  ): Promise<Order | null> {
+    if (!supabase) return null;
+
+    try {
+      const { data: orderRow, error: orderErr } = await supabase
+        .from('orders')
+        .select('*')
+        .or(`id.eq.${orderIdOrNumber},order_number.eq.${orderIdOrNumber}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (orderErr || !orderRow) {
+        return null;
+      }
+
+      const { data: itemRows } = await supabase
+        .from('order_items')
+        .select('*')
+        .eq('order_id', orderRow.id);
+
+      const items: OrderItem[] = (itemRows || []).map((item: any) => {
+        const matchedProd = products.find(p => p.id === item.product_id);
+        return {
+          productId: item.product_id,
+          variantId: item.variant_id || undefined,
+          productName: item.product_name,
+          productImage: matchedProd?.image || '',
+          unit: matchedProd?.unit || 'كيلو',
+          variantLabel: item.variant_label || undefined,
+          price: Number(item.price),
+          quantity: Number(item.quantity),
+          itemTotal: Number(item.item_total),
+          piecesPerKiloRange: item.pieces_per_kilo_range || undefined,
+          notes: item.notes || undefined
+        };
+      });
+
+      return {
+        id: String(orderRow.id),
+        orderNumber: orderRow.order_number,
+        customerId: orderRow.customer_id || undefined,
+        customerName: orderRow.customer_name,
+        customerPhone: orderRow.customer_phone,
+        governorate: orderRow.governorate,
+        city: orderRow.city || '',
+        district: orderRow.district || '',
+        address: orderRow.address,
+        notes: orderRow.notes || '',
+        items,
+        subtotal: Number(orderRow.subtotal),
+        deliveryFee: Number(orderRow.delivery_fee || 0),
+        discountAmount: Number(orderRow.discount_amount || 0),
+        couponCode: orderRow.coupon_code || undefined,
+        total: Number(orderRow.total),
+        paymentMethod: orderRow.payment_method,
+        depositRequired: Number(orderRow.deposit_required || 0),
+        depositPaid: Number(orderRow.deposit_paid || 0),
+        depositStatus: orderRow.deposit_status || 'none',
+        depositTransactionRef: orderRow.deposit_transaction_ref || undefined,
+        remainingAmount: Number(orderRow.remaining_amount || 0),
+        status: orderRow.status || 'new',
+        createdAt: orderRow.created_at,
+        deliveryTargetDate: 'نفس اليوم مبرد 🚚',
+        isBeforeCutoff: true,
+        estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
+      };
+    } catch (err) {
+      console.warn('[Single Order Read] Exception querying Supabase:', err);
+      return null;
+    }
+  }
+
   // A) GET /api/customer/orders: Strictly restricted to authenticated customer
-  app.get('/api/customer/orders', (req, res) => {
+  app.get('/api/customer/orders', async (req, res) => {
     const customer = getAuthenticatedCustomer(req);
     if (!customer) {
       return res.status(401).json({ 
@@ -446,7 +605,14 @@ export async function createServer() {
       });
     }
 
-    // Authorize ONLY by customer ID or trusted normalized phone from session
+    const supabaseAdmin = getServerSupabase();
+    const dbOrders = await fetchOrdersFromSupabaseForCustomer(supabaseAdmin, customer.id, customer.phone);
+
+    if (dbOrders !== null) {
+      return res.json({ success: true, count: dbOrders.length, data: dbOrders });
+    }
+
+    // Fallback to in-memory orders if Supabase unavailable
     const myOrders = orders.filter(o => {
       const matchId = o.customerId && o.customerId === customer.id;
       const matchPhone = o.customerPhone && normalizeEgyptianPhone(o.customerPhone) === customer.phone;
@@ -458,7 +624,7 @@ export async function createServer() {
   });
 
   // B) GET /api/orders/:id: Strictly authenticated and ownership-verified
-  app.get('/api/orders/:id', (req, res) => {
+  app.get('/api/orders/:id', async (req, res) => {
     const customer = getAuthenticatedCustomer(req);
     if (!customer) {
       return res.status(401).json({ 
@@ -468,9 +634,17 @@ export async function createServer() {
     }
 
     const orderId = req.params.id;
-    const order = orders.find(o => o.id === orderId || o.orderNumber === orderId);
+    const supabaseAdmin = getServerSupabase();
+    let order: Order | null = null;
 
-    // Return safe 404 if order does not exist OR if customer does not own it (IDOR protection)
+    if (supabaseAdmin) {
+      order = await fetchSingleOrderFromSupabase(supabaseAdmin, orderId);
+    }
+
+    if (!order) {
+      order = orders.find(o => o.id === orderId || o.orderNumber === orderId) || null;
+    }
+
     if (!order) {
       return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
@@ -479,7 +653,6 @@ export async function createServer() {
     const isOwner = (order.customerId && order.customerId === customer.id) || (orderPhone === customer.phone);
 
     if (!isOwner) {
-      // Safe 404: Never disclose whether another customer's order exists
       return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
 
@@ -497,7 +670,7 @@ export async function createServer() {
   // 7. Collision-resistant order number
   // ==========================================
 
-  // Unique Order Number Generator with bounded retries
+  // Unique Order Number Generator with bounded retries & strict error handling
   async function generateUniqueOrderNumber(supabase: ReturnType<typeof getServerSupabase>): Promise<string | null> {
     const maxAttempts = 10;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -514,17 +687,115 @@ export async function createServer() {
             .select('id')
             .eq('order_number', candidate)
             .limit(1);
-          if (!error && data && data.length > 0) {
+
+          if (error) {
+            // Failed database uniqueness check must NOT be treated as candidate availability
+            continue;
+          }
+
+          if (data && data.length > 0) {
             continue;
           }
         } catch {
-          // Proceed with local validation if network check fails
+          // Uniqueness check query threw exception; do not treat candidate as verified
+          continue;
         }
       }
 
       return candidate;
     }
     return null;
+  }
+
+  // Customer persistence/upsert before order creation to satisfy foreign-key constraints
+  async function upsertCustomerInDatabase(
+    supabase: ReturnType<typeof getServerSupabase>,
+    customerData: {
+      id: string;
+      phone: string;
+      name: string;
+      governorate: string;
+      city?: string;
+      district?: string;
+      address: string;
+    }
+  ): Promise<{ success: boolean; customerId: string; error?: string }> {
+    if (!supabase) {
+      return { success: true, customerId: customerData.id };
+    }
+
+    try {
+      const { data: existing, error: findError } = await supabase
+        .from('customers')
+        .select('id, phone, name')
+        .eq('phone', customerData.phone)
+        .limit(1)
+        .maybeSingle();
+
+      if (findError && findError.code !== 'PGRST116') {
+        console.error('[Customer Upsert] Error finding customer by phone:', findError);
+        return { success: false, customerId: '', error: 'خطأ في التحقق من بيانات العميل في قاعدة البيانات' };
+      }
+
+      const nowIso = new Date().toISOString();
+
+      if (existing && existing.id) {
+        const { error: updateError } = await supabase
+          .from('customers')
+          .update({
+            name: customerData.name,
+            governorate: customerData.governorate,
+            city: customerData.city || null,
+            district: customerData.district || null,
+            address: customerData.address,
+            updated_at: nowIso
+          })
+          .eq('id', existing.id);
+
+        if (updateError) {
+          console.error('[Customer Upsert] Error updating customer:', updateError);
+          return { success: false, customerId: '', error: 'تعذر تحديث بيانات العميل في قاعدة البيانات قبل تسجيل الطلب' };
+        }
+
+        return { success: true, customerId: existing.id };
+      } else {
+        const newId = customerData.id || `cust-${Date.now()}-${crypto.randomInt(1000, 9999)}`;
+        const { error: insertError } = await supabase
+          .from('customers')
+          .insert({
+            id: newId,
+            phone: customerData.phone,
+            name: customerData.name,
+            governorate: customerData.governorate,
+            city: customerData.city || null,
+            district: customerData.district || null,
+            address: customerData.address,
+            created_at: nowIso,
+            updated_at: nowIso
+          });
+
+        if (insertError) {
+          if (insertError.code === '23505') {
+            const { data: rechecked } = await supabase
+              .from('customers')
+              .select('id')
+              .eq('phone', customerData.phone)
+              .limit(1)
+              .maybeSingle();
+            if (rechecked && rechecked.id) {
+              return { success: true, customerId: rechecked.id };
+            }
+          }
+          console.error('[Customer Upsert] Error inserting customer:', insertError);
+          return { success: false, customerId: '', error: 'تعذر حفظ بيانات العميل في قاعدة البيانات قبل تسجيل الطلب' };
+        }
+
+        return { success: true, customerId: newId };
+      }
+    } catch (err) {
+      console.error('[Customer Upsert] Exception during customer upsert:', err);
+      return { success: false, customerId: '', error: 'حدث خطأ غير متوقع أثناء معالجة بيانات العميل' };
+    }
   }
 
   app.post('/api/orders', async (req, res) => {
@@ -588,31 +859,55 @@ export async function createServer() {
 
     // 3. CUSTOMER IDENTITY BINDING (Auth Session takes precedence)
     const authCustomer = getAuthenticatedCustomer(req);
-    let customerId: string;
-    let verifiedPhone: string;
+    const verifiedPhone = authCustomer ? authCustomer.phone : customerPhone; // Session phone is trusted
+    const initialCustomerId = authCustomer ? authCustomer.id : `cust_${Date.now()}_${crypto.randomInt(1000, 9999)}`;
 
-    if (authCustomer) {
-      customerId = authCustomer.id;
-      verifiedPhone = authCustomer.phone; // Session phone is trusted
-    } else {
-      verifiedPhone = customerPhone;
-      const existing = customers.find(c => c.phone === verifiedPhone);
-      if (existing) {
-        customerId = existing.id;
-      } else {
-        const newCust: CustomerUser = {
-          id: `cust_${Date.now()}_${crypto.randomInt(1000, 9999)}`,
-          phone: verifiedPhone,
-          name: customerName.trim(),
-          governorate: governorate.trim(),
-          city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
-          district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
-          address: address.trim(),
-          createdAt: new Date().toISOString()
-        };
-        customers.push(newCust);
-        customerId = newCust.id;
+    // Persist/Upsert customer in database before creating order to satisfy foreign key constraints
+    const supabaseAdmin = getServerSupabase();
+    const customerUpsertRes = await upsertCustomerInDatabase(supabaseAdmin, {
+      id: initialCustomerId,
+      phone: verifiedPhone,
+      name: customerName.trim(),
+      governorate: governorate.trim(),
+      city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
+      district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
+      address: address.trim()
+    });
+
+    if (!customerUpsertRes.success) {
+      const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
+      if (!allowInMemory) {
+        return res.status(500).json({
+          success: false,
+          error: customerUpsertRes.error || 'تعذر تسجيل بيانات العميل في قاعدة البيانات قبل إنشاء الطلب.'
+        });
       }
+    }
+
+    const customerId = customerUpsertRes.customerId || initialCustomerId;
+
+    // Synchronize local customer memory store
+    const existingMem = customers.find(c => c.phone === verifiedPhone || c.id === customerId);
+    const nowIso = new Date().toISOString();
+    if (existingMem) {
+      existingMem.name = customerName.trim();
+      existingMem.governorate = governorate.trim();
+      existingMem.city = typeof city === 'string' ? city.trim().slice(0, 100) : '';
+      existingMem.district = typeof district === 'string' ? district.trim().slice(0, 100) : '';
+      existingMem.address = address.trim();
+      existingMem.updatedAt = nowIso;
+    } else {
+      customers.push({
+        id: customerId,
+        phone: verifiedPhone,
+        name: customerName.trim(),
+        governorate: governorate.trim(),
+        city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
+        district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
+        address: address.trim(),
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
     }
 
     // 4. READ-ONLY ITEM VALIDATION & PRICING
@@ -759,9 +1054,8 @@ export async function createServer() {
     const remainingAmount = finalTotal;
 
     // 8. GENERATE USER-FRIENDLY, COLLISION-RESISTANT ORDER NUMBER
-    const supabaseAdmin = getServerSupabase();
-    const orderNumber = await generateUniqueOrderNumber(supabaseAdmin);
-    if (!orderNumber) {
+    const initialOrderNumber = await generateUniqueOrderNumber(supabaseAdmin);
+    if (!initialOrderNumber) {
       return res.status(500).json({
         success: false,
         error: 'تعذر توليد رقم طلب مميز وفريد حالياً. يرجى إعادة المحاولة خلال لحظات.'
@@ -772,7 +1066,7 @@ export async function createServer() {
 
     const newOrder: Order = {
       id: orderId,
-      orderNumber,
+      orderNumber: initialOrderNumber,
       customerId,
       customerName: customerName.trim(),
       customerPhone: verifiedPhone,
@@ -801,45 +1095,78 @@ export async function createServer() {
     };
 
     // 9. SAFE DURABLE PERSISTENCE (EXACT MATCH WITH supabase-schema.sql)
-    // Persists into `orders` first, then persists all verified items into `order_items`.
-    // If order_items fails, cleans up the inserted order and fails safely.
+    // Persists into `orders` with unique collision retry, then persists all verified items into `order_items`.
+    // If order_items fails, performs compensating rollback deletion of parent order.
     if (supabaseAdmin) {
       try {
-        const orderRow = {
-          id: newOrder.id,
-          order_number: newOrder.orderNumber,
-          customer_id: newOrder.customerId || null,
-          customer_name: newOrder.customerName,
-          customer_phone: newOrder.customerPhone,
-          governorate: newOrder.governorate,
-          city: newOrder.city || null,
-          district: newOrder.district || null,
-          address: newOrder.address,
-          notes: newOrder.notes || null,
-          subtotal: newOrder.subtotal,
-          delivery_fee: newOrder.deliveryFee,
-          discount_amount: newOrder.discountAmount,
-          coupon_code: newOrder.couponCode || null,
-          total: newOrder.total,
-          payment_method: newOrder.paymentMethod,
-          deposit_required: newOrder.depositRequired,
-          deposit_paid: newOrder.depositPaid,
-          deposit_status: newOrder.depositStatus,
-          deposit_transaction_ref: newOrder.depositTransactionRef || null,
-          remaining_amount: newOrder.remainingAmount,
-          status: newOrder.status,
-          created_at: newOrder.createdAt
-        };
+        let orderInserted = false;
+        let candidateNumber = initialOrderNumber;
+        const maxInsertAttempts = 3;
 
-        const { error: orderInsertError } = await supabaseAdmin
-          .from('orders')
-          .insert(orderRow);
+        for (let insertAttempt = 1; insertAttempt <= maxInsertAttempts; insertAttempt++) {
+          newOrder.orderNumber = candidateNumber;
 
-        if (orderInsertError) {
-          console.error('[Order Persistence] Failed to persist order row in Supabase');
+          const orderRow = {
+            id: newOrder.id,
+            order_number: candidateNumber,
+            customer_id: newOrder.customerId || null,
+            customer_name: newOrder.customerName,
+            customer_phone: newOrder.customerPhone,
+            governorate: newOrder.governorate,
+            city: newOrder.city || null,
+            district: newOrder.district || null,
+            address: newOrder.address,
+            notes: newOrder.notes || null,
+            subtotal: newOrder.subtotal,
+            delivery_fee: newOrder.deliveryFee,
+            discount_amount: newOrder.discountAmount,
+            coupon_code: newOrder.couponCode || null,
+            total: newOrder.total,
+            payment_method: newOrder.paymentMethod,
+            deposit_required: newOrder.depositRequired,
+            deposit_paid: newOrder.depositPaid,
+            deposit_status: newOrder.depositStatus,
+            deposit_transaction_ref: newOrder.depositTransactionRef || null,
+            remaining_amount: newOrder.remainingAmount,
+            status: newOrder.status,
+            created_at: newOrder.createdAt
+          };
+
+          const { error: orderInsertError } = await supabaseAdmin
+            .from('orders')
+            .insert(orderRow);
+
+          if (orderInsertError) {
+            // Check if this is an actual uniqueness collision on order_number
+            const isUniqueOrderNumberCollision = orderInsertError.code === '23505' &&
+              (orderInsertError.message?.includes('order_number') ||
+               orderInsertError.details?.includes('order_number') ||
+               orderInsertError.message?.includes('idx_orders_order_number_unique'));
+
+            if (isUniqueOrderNumberCollision && insertAttempt < maxInsertAttempts) {
+              console.warn(`[Order Persistence] Uniqueness collision on order_number (${candidateNumber}). Retrying with fresh number (attempt ${insertAttempt + 1})...`);
+              const freshCandidate = await generateUniqueOrderNumber(supabaseAdmin);
+              if (freshCandidate) {
+                candidateNumber = freshCandidate;
+                continue;
+              }
+            }
+
+            console.error('[Order Persistence] Failed to persist order row in Supabase:', orderInsertError);
+            return res.status(500).json({
+              success: false,
+              error: 'تعذر حفظ الطلب في قاعدة البيانات بشكل دائم. يرجى المحاولة لاحقاً أو التواصل هاتفياً مع المتجر.'
+            });
+          }
+
+          orderInserted = true;
+          break;
+        }
+
+        if (!orderInserted) {
           return res.status(500).json({
             success: false,
-            error: 'تعذر حفظ الطلب في قاعدة البيانات بشكل دائم. يرجى المحاولة لاحقاً أو التواصل هاتفياً مع المتجر.'
+            error: 'تعذر تسجيل الطلب بعد عدة محاولات بسبب تكرار رقم الطلب. يرجى إعادة المحاولة.'
           });
         }
 
@@ -862,12 +1189,15 @@ export async function createServer() {
           .insert(orderItemRows);
 
         if (itemsInsertError) {
-          console.error('[Order Persistence] Failed to persist order items row in Supabase');
-          // Atomic cleanup: remove parent order if order_items failed
+          console.error('[Order Persistence] Failed to persist order items row in Supabase:', itemsInsertError);
+          // Compensating rollback: delete parent order to prevent orphan order rows
           try {
-            await supabaseAdmin.from('orders').delete().eq('id', newOrder.id);
+            const { error: delErr } = await supabaseAdmin.from('orders').delete().eq('id', newOrder.id);
+            if (delErr) {
+              console.error('[Order Persistence] Compensating rollback returned error during orphan cleanup:', delErr);
+            }
           } catch (cleanupErr) {
-            console.error('[Order Persistence] Failed to clean up orphaned order after items insert failure');
+            console.error('[Order Persistence] Exception during compensating orphan order cleanup:', cleanupErr);
           }
 
           return res.status(500).json({
@@ -876,7 +1206,7 @@ export async function createServer() {
           });
         }
       } catch (dbErr) {
-        console.error('[Order Persistence] Exception during durable database insert');
+        console.error('[Order Persistence] Exception during durable database insert:', dbErr);
         return res.status(500).json({
           success: false,
           error: 'حدث خطأ أثناء معالجة وحفظ الطلب. يرجى إعادة المحاولة.'

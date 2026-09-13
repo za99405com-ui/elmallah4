@@ -72,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(prod
 -- 4. Orders Table (الطلبات)
 CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
-    order_number VARCHAR(20) NOT NULL,
+    order_number VARCHAR(20) UNIQUE NOT NULL,
     customer_id TEXT REFERENCES customers(id),
     customer_name VARCHAR(100) NOT NULL,
     customer_phone VARCHAR(20) NOT NULL,
@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_order_number_unique ON orders(order_number);
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer_phone ON orders(customer_phone);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);

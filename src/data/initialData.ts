@@ -138,8 +138,8 @@ export const INITIAL_SETTINGS: StoreSettings = {
 /**
  * جلب قائمة المنتجات وخيارات البيع (Product Variants) مباشرة من جداول Supabase
  */
-export async function fetchProductsFromSupabase(): Promise<Product[]> {
-  const supabase = getSupabase();
+export async function fetchProductsFromSupabase(client?: any): Promise<Product[]> {
+  const supabase = client || getSupabase();
   if (!supabase) {
     return [];
   }
@@ -319,8 +319,8 @@ export async function fetchProductByIdFromSupabase(productId: string): Promise<P
 /**
  * جلب مناطق التوصيل المعتمدة مباشرة من Supabase (مع الاحتفاظ بالمناطق الافتراضية)
  */
-export async function fetchDeliveryRegionsFromSupabase(): Promise<DeliveryRegion[]> {
-  const supabase = getSupabase();
+export async function fetchDeliveryRegionsFromSupabase(client?: any): Promise<DeliveryRegion[]> {
+  const supabase = client || getSupabase();
   if (!supabase) return INITIAL_REGIONS;
 
   try {
@@ -351,8 +351,8 @@ export async function fetchDeliveryRegionsFromSupabase(): Promise<DeliveryRegion
 /**
  * جلب إعدادات المتجر ومواعيد الإغلاق مباشرة من Supabase
  */
-export async function fetchStoreSettingsFromSupabase(): Promise<StoreSettings | null> {
-  const supabase = getSupabase();
+export async function fetchStoreSettingsFromSupabase(client?: any): Promise<StoreSettings | null> {
+  const supabase = client || getSupabase();
   if (!supabase) return INITIAL_SETTINGS;
 
   try {
@@ -386,8 +386,8 @@ export async function fetchStoreSettingsFromSupabase(): Promise<StoreSettings | 
 /**
  * جلب كوبونات الخصم الفعالة مباشرة من Supabase
  */
-export async function fetchCouponsFromSupabase(): Promise<Coupon[]> {
-  const supabase = getSupabase();
+export async function fetchCouponsFromSupabase(client?: any): Promise<Coupon[]> {
+  const supabase = client || getSupabase();
   if (!supabase) return INITIAL_COUPONS;
 
   try {
