@@ -142,16 +142,8 @@ function mapProduct(
     category: mapCategory(category?.slug, category?.name || p.categoryName),
     price: Number(p.price || 0),
     unit: p.pricingUnit === 'piece' ? 'قطعة' : 'كيلو',
-    inStock:
-      Boolean(p.inStock) &&
-      (
-        Number(p.stockQuantity || 0) > 0 ||
-        (p.variants || []).some(
-          (variant) =>
-            Boolean(variant.isActive) &&
-            Number(variant.stockQuantity || 0) > 0
-        )
-      ),
+    // Admin is the authoritative source for product availability.
+    inStock: Boolean(p.inStock),
     isVisible: Boolean(p.isActive),
     sortOrder: Number(p.sortOrder || 0),
     image: p.imageUrl || '',
