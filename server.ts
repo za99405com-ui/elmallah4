@@ -23,6 +23,7 @@ import {
   fetchAdminRegions,
   fetchAdminSettings,
 } from './src/server/adminData';
+import { adminIntegrationPost } from './src/server/adminApi';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1426,61 +1427,68 @@ export async function createServer() {
   // ==========================================
 
   app.post('/api/coupons/validate', async (req, res) => {
-    await ensureFreshServerData();
     const { code, cartTotal } = req.body;
+
     if (!code || typeof code !== 'string') {
-      return res.status(400).json({ success: false, error: 'يرجى إدخال كود الكوبون' });
-    }
-
-    const coupon = coupons.find(c => c.code.trim().toUpperCase() === code.trim().toUpperCase());
-    if (!coupon) {
-      return res.status(404).json({ success: false, error: 'كود الكوبون غير صحيح أو غير موجود' });
-    }
-
-    if (!coupon.isActive) {
-      return res.status(400).json({ success: false, error: 'هذا الكوبون غير مفعّل حالياً' });
-    }
-
-    if (coupon.expiryDate && new Date(coupon.expiryDate) < new Date()) {
-      return res.status(400).json({ success: false, error: 'انتهت صلاحية هذا الكوبون' });
-    }
-
-    const rawTotal = Number(cartTotal);
-    const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0;
-
-    if (coupon.minOrderAmount && total < coupon.minOrderAmount) {
-      return res.status(400).json({ 
-        success: false, 
-        error: `الحد الأدنى لتطبيق هذا الكوبون هو ${coupon.minOrderAmount} جنيه` 
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى إدخال كود الكوبون',
       });
     }
 
-    if (coupon.usageLimit && coupon.usageCount >= coupon.usageLimit) {
-      return res.status(400).json({ success: false, error: 'تم استهلاك الحد الأقصى لاستخدام هذا الكوبون' });
-    }
+    const rawTotal = Number(cartTotal);
+    const subtotal =
+      Number.isFinite(rawTotal) && rawTotal >= 0 ? rawTotal : 0;
 
-    let discount = 0;
-    if (coupon.discountType === 'percentage') {
-      discount = (total * coupon.discountValue) / 100;
-      if (coupon.maxDiscount && discount > coupon.maxDiscount) {
-        discount = coupon.maxDiscount;
-      }
-    } else {
-      discount = Math.min(coupon.discountValue, total);
-    }
+    try {
+      const result = await adminIntegrationPost<{
+        valid: boolean;
+        code: string;
+        discountType: 'percentage' | 'fixed';
+        discountValue: number;
+        discountAmount: number;
+        minOrderValue?: number;
+        maxDiscountValue?: number;
+        expiryDate?: string;
+      }>('/integration/coupons/validate', {
+        code: code.trim(),
+        subtotal,
+      });
 
-    res.json({
-      success: true,
-      message: `تم تطبيق كود الخصم بنجاح: خصم ${Math.round(discount * 10) / 10} جنيه`,
-      data: {
-        code: coupon.code,
-        discountType: coupon.discountType,
-        discountValue: coupon.discountValue,
-        minOrderAmount: coupon.minOrderAmount,
-        maxDiscount: coupon.maxDiscount,
-        discountAmount: Math.round(discount * 10) / 10
+      return res.json({
+        success: true,
+        message: `تم تطبيق كود الخصم بنجاح: خصم ${result.discountAmount} جنيه`,
+        data: {
+          code: result.code,
+          discountType: result.discountType,
+          discountValue: result.discountValue,
+          minOrderAmount: result.minOrderValue,
+          maxDiscount: result.maxDiscountValue,
+          discountAmount: result.discountAmount,
+        },
+      });
+    } catch (err: any) {
+      const status = Number(err?.status);
+
+      if (status === 400 || status === 404) {
+        const adminMessage =
+          err?.payload && typeof err.payload.error === 'string'
+            ? err.payload.error
+            : 'كود الخصم غير صالح أو غير متاح';
+
+        return res.status(status).json({
+          success: false,
+          error: adminMessage,
+        });
       }
-    });
+
+      console.error('[Admin API] Coupon validation failed:', err);
+
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر التحقق من كود الخصم حالياً، يرجى المحاولة مرة أخرى',
+      });
+    }
   });
 
   // ==========================================
