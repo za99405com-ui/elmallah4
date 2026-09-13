@@ -23,7 +23,10 @@ import {
   fetchAdminRegions,
   fetchAdminSettings,
 } from './src/server/adminData';
-import { adminIntegrationPost } from './src/server/adminApi';
+import {
+  adminIntegrationPost,
+  adminPublicPost,
+} from './src/server/adminApi';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -985,441 +988,336 @@ export async function createServer() {
   }
 
   app.post('/api/orders', async (req, res) => {
-    // Refresh server data if cache expired before validating store state, pricing, or stock
-    await ensureFreshServerData();
+    const payload: CreateOrderPayload = req.body;
 
-    // 1. STORE CLOSED ENFORCEMENT
-    if (settings.isStoreOpen === false) {
-      return res.status(403).json({
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({
         success: false,
-        error: 'المتجر مغلق حالياً ولا يستقبل طلبات جديدة في الوقت الحالي. يمكنك تصفح الأصناف وسنعاود استقبال الطلبات قريباً.'
+        error: 'بيانات الطلب غير صالحة',
       });
     }
 
-    const payload: CreateOrderPayload = req.body;
-    if (!payload || typeof payload !== 'object') {
-      return res.status(400).json({ success: false, error: 'بيانات الطلب غير صالحة' });
-    }
+    const {
+      items,
+      deliveryAddress,
+      paymentMethod,
+      depositTransactionRef,
+      couponCode,
+      notes,
+    } = payload;
 
-    const { items, deliveryAddress, paymentMethod, depositTransactionRef, couponCode, notes } = payload;
-
-    // 2. BASIC REQUEST VALIDATION
-    if (!items || !Array.isArray(items) || items.length === 0 || items.length > 50) {
-      return res.status(400).json({ success: false, error: 'سلة المشتريات فارغة أو تحتوي على عناصر غير صالحة' });
+    if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+      return res.status(400).json({
+        success: false,
+        error: 'سلة المشتريات فارغة أو تحتوي على عناصر غير صالحة',
+      });
     }
 
     if (!deliveryAddress || typeof deliveryAddress !== 'object') {
-      return res.status(400).json({ success: false, error: 'بيانات التوصيل مطلوبة' });
+      return res.status(400).json({
+        success: false,
+        error: 'بيانات التوصيل مطلوبة',
+      });
     }
 
-    const { customerName, customerPhone: rawPhone, governorate, city, district, address } = deliveryAddress;
+    const {
+      customerName,
+      customerPhone: rawPhone,
+      governorate,
+      city,
+      district,
+      address,
+    } = deliveryAddress;
 
-    if (!customerName || typeof customerName !== 'string' || customerName.trim().length < 2 || customerName.trim().length > 100) {
-      return res.status(400).json({ success: false, error: 'يرجى إدخال اسم العميل بشكل صحيح (بين 2 و 100 حرف)' });
+    if (
+      !customerName ||
+      typeof customerName !== 'string' ||
+      customerName.trim().length < 2
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى إدخال اسم العميل بشكل صحيح',
+      });
     }
 
     if (!rawPhone || typeof rawPhone !== 'string') {
-      return res.status(400).json({ success: false, error: 'رقم هاتف العميل مطلوب' });
+      return res.status(400).json({
+        success: false,
+        error: 'رقم هاتف العميل مطلوب',
+      });
     }
 
     const customerPhone = normalizeEgyptianPhone(rawPhone);
+
     if (!isValidEgyptianPhone(customerPhone)) {
-      return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف محمول مصري صحيح (مثال: 01015192040)' });
-    }
-
-    if (!governorate || typeof governorate !== 'string' || governorate.trim().length < 2 || governorate.trim().length > 50) {
-      return res.status(400).json({ success: false, error: 'يرجى اختيار المحافظة بشكل صحيح' });
-    }
-
-    if (!address || typeof address !== 'string' || address.trim().length < 5 || address.trim().length > 300) {
-      return res.status(400).json({ success: false, error: 'يرجى كتابة العنوان بالتفصيل (بين 5 و 300 حرف)' });
-    }
-
-    // Payment Method Whitelist
-    const allowedPaymentMethods: PaymentMethod[] = ['cash_on_delivery', 'instapay', 'vodafone_cash'];
-    if (!paymentMethod || !allowedPaymentMethods.includes(paymentMethod)) {
-      return res.status(400).json({ success: false, error: 'طريقة الدفع المحددة غير مدعومة' });
-    }
-
-    // Bounded optional fields
-    const safeNotes = typeof notes === 'string' ? notes.trim().slice(0, 500) : '';
-    const safeCouponCode = typeof couponCode === 'string' ? couponCode.trim().slice(0, 30) : undefined;
-    const safeTransactionRef = typeof depositTransactionRef === 'string' ? depositTransactionRef.trim().slice(0, 100) : undefined;
-
-    // 3. CUSTOMER IDENTITY BINDING (Auth Session takes precedence)
-    const authCustomer = getAuthenticatedCustomer(req);
-    const verifiedPhone = authCustomer ? authCustomer.phone : customerPhone; // Session phone is trusted
-    const initialCustomerId = authCustomer ? authCustomer.id : `cust_${Date.now()}_${crypto.randomInt(1000, 9999)}`;
-
-    // Persist/Upsert customer in database before creating order to satisfy foreign key constraints
-    const supabaseAdmin = getServerSupabase();
-    const customerUpsertRes = await upsertCustomerInDatabase(supabaseAdmin, {
-      id: initialCustomerId,
-      phone: verifiedPhone,
-      name: customerName.trim(),
-      governorate: governorate.trim(),
-      city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
-      district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
-      address: address.trim()
-    });
-
-    if (!customerUpsertRes.success) {
-      const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
-      if (!allowInMemory) {
-        return res.status(500).json({
-          success: false,
-          error: customerUpsertRes.error || 'تعذر تسجيل بيانات العميل في قاعدة البيانات قبل إنشاء الطلب.'
-        });
-      }
-    }
-
-    const customerId = customerUpsertRes.customerId || initialCustomerId;
-
-    // Synchronize local customer memory store
-    const existingMem = customers.find(c => c.phone === verifiedPhone || c.id === customerId);
-    const nowIso = new Date().toISOString();
-    if (existingMem) {
-      existingMem.name = customerName.trim();
-      existingMem.governorate = governorate.trim();
-      existingMem.city = typeof city === 'string' ? city.trim().slice(0, 100) : '';
-      existingMem.district = typeof district === 'string' ? district.trim().slice(0, 100) : '';
-      existingMem.address = address.trim();
-      existingMem.updatedAt = nowIso;
-    } else {
-      customers.push({
-        id: customerId,
-        phone: verifiedPhone,
-        name: customerName.trim(),
-        governorate: governorate.trim(),
-        city: typeof city === 'string' ? city.trim().slice(0, 100) : '',
-        district: typeof district === 'string' ? district.trim().slice(0, 100) : '',
-        address: address.trim(),
-        createdAt: nowIso,
-        updatedAt: nowIso
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى إدخال رقم هاتف محمول مصري صحيح',
       });
     }
 
-    // 4. READ-ONLY ITEM VALIDATION & PRICING
-    // Strictly NO stock mutations during validation
-    let calculatedSubtotal = 0;
-    const verifiedOrderItems: OrderItem[] = [];
+    if (!governorate || typeof governorate !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى اختيار المحافظة',
+      });
+    }
+
+    if (
+      !address ||
+      typeof address !== 'string' ||
+      address.trim().length < 5
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى كتابة عنوان التوصيل بالتفصيل',
+      });
+    }
+
+    const allowedPaymentMethods: PaymentMethod[] = [
+      'cash_on_delivery',
+      'instapay',
+      'vodafone_cash',
+    ];
+
+    if (
+      !paymentMethod ||
+      !allowedPaymentMethods.includes(paymentMethod)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'طريقة الدفع المحددة غير مدعومة',
+      });
+    }
 
     for (const item of items) {
-      if (!item || typeof item !== 'object') {
-        return res.status(400).json({ success: false, error: 'بيانات أحد المنتجات في السلة غير صالحة' });
-      }
-
-      if (!item.productId || typeof item.productId !== 'string' || item.productId.length > 100) {
-        return res.status(400).json({ success: false, error: 'معرف المنتج غير صالح' });
-      }
-
-      // Quantity validation: reject NaN, Infinity, negative, zero, and absurd numbers
-      const rawQty = item.quantity;
-      if (typeof rawQty !== 'number' || !Number.isFinite(rawQty) || rawQty <= 0 || rawQty > 100) {
-        return res.status(400).json({ success: false, error: `كمية غير صالحة للمنتج (${item.productId}). يجب أن تكون رقماً موجباً حتى 100.` });
-      }
-      const qty = Math.round(rawQty * 10) / 10;
-
-      const product = products.find(p => p.id === item.productId);
-      if (!product || product.isVisible === false) {
-        return res.status(400).json({ success: false, error: `المنتج المختار غير متاح حالياً (${item.productId})` });
-      }
-
-      if (!product.inStock) {
-        return res.status(400).json({ success: false, error: `سمك ${product.name} غير متوفر في المخزون حالياً` });
-      }
-
-      let finalPrice = product.price;
-      let variantLabel: string | undefined = undefined;
-      let pieceRange = product.piecesPerKiloRange;
-
-      if (item.variantId) {
-        if (typeof item.variantId !== 'string' || item.variantId.length > 100) {
-          return res.status(400).json({ success: false, error: 'معرف خيار البيع غير صالح' });
-        }
-        if (product.variants && product.variants.length > 0) {
-          const variant = product.variants.find(v => v.id === item.variantId);
-          if (variant && variant.isActive) {
-            finalPrice = variant.price;
-            variantLabel = variant.label;
-            pieceRange = `${variant.pieceCount} قطع تقريباً في الكيلو`;
-          }
-        }
-      }
-
-      const itemTotal = finalPrice * qty;
-      calculatedSubtotal += itemTotal;
-
-      verifiedOrderItems.push({
-        productId: product.id,
-        variantId: item.variantId,
-        variantLabel,
-        productName: product.name,
-        productImage: product.image,
-        unit: product.unit,
-        price: finalPrice,
-        quantity: qty,
-        itemTotal,
-        piecesPerKiloRange: pieceRange,
-        notes: typeof item.notes === 'string' ? item.notes.trim().slice(0, 200) : undefined
-      });
-    }
-
-    // 5. AUTHORITATIVE DELIVERY REGION & FEE
-    // Only allow delivery to a configured active region, reject safely otherwise
-    const matchingRegion = regions.find(r => 
-      r.isActive && 
-      r.governorate.trim().toLowerCase() === governorate.trim().toLowerCase()
-    );
-
-    if (!matchingRegion) {
-      return res.status(400).json({
-        success: false,
-        error: `عذراً، خدمة التوصيل غير متاحة حالياً لمحافظة ${governorate}. يرجى اختيار محافظة ضمن نطاق التوصيل المتاح.`
-      });
-    }
-
-    const deliveryFee = matchingRegion.deliveryFee;
-    if (typeof deliveryFee !== 'number' || !Number.isFinite(deliveryFee) || deliveryFee < 0) {
-      return res.status(500).json({
-        success: false,
-        error: 'تعذر تحديد رسوم التوصيل لهذه المنطقة حالياً'
-      });
-    }
-
-    if (matchingRegion.minOrderAmount && calculatedSubtotal < matchingRegion.minOrderAmount) {
-      return res.status(400).json({
-        success: false,
-        error: `الحد الأدنى للطلب في منطقة ${matchingRegion.governorate} هو ${matchingRegion.minOrderAmount} جنيه`
-      });
-    }
-
-    if (settings.minimumOrderAmount && calculatedSubtotal < settings.minimumOrderAmount) {
-      return res.status(400).json({
-        success: false,
-        error: `الحد الأدنى للطلب من المتجر هو ${settings.minimumOrderAmount} جنيه`
-      });
-    }
-
-    // 6. READ-ONLY COUPON VALIDATION
-    // Strictly NO mutation of coupon usage before durable persistence success
-    let discountAmount = 0;
-    let validatedCouponCode: string | undefined = undefined;
-
-    if (safeCouponCode) {
-      const coupon = coupons.find(c => c.code.trim().toUpperCase() === safeCouponCode.toUpperCase() && c.isActive);
-      if (coupon) {
-        const notExpired = !coupon.expiryDate || new Date(coupon.expiryDate) >= new Date();
-        const isEligible = !coupon.minOrderAmount || calculatedSubtotal >= coupon.minOrderAmount;
-        const withinLimit = !coupon.usageLimit || coupon.usageCount < coupon.usageLimit;
-        if (notExpired && isEligible && withinLimit) {
-          if (coupon.discountType === 'percentage') {
-            let d = (calculatedSubtotal * coupon.discountValue) / 100;
-            if (coupon.maxDiscount && d > coupon.maxDiscount) d = coupon.maxDiscount;
-            discountAmount = Math.round(d * 10) / 10;
-          } else {
-            discountAmount = Math.min(coupon.discountValue, calculatedSubtotal);
-          }
-          validatedCouponCode = coupon.code;
-        }
+      if (
+        !item ||
+        typeof item.productId !== 'string' ||
+        typeof item.quantity !== 'number' ||
+        !Number.isFinite(item.quantity) ||
+        item.quantity <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'يوجد منتج أو كمية غير صالحة في السلة',
+        });
       }
     }
 
-    // 7. FINAL TOTAL & UNTRUSTED DEPOSIT HARDENING
-    const finalTotal = Math.max(0, calculatedSubtotal + deliveryFee - discountAmount);
+    // Authenticated session phone always wins over browser-supplied phone.
+    const authCustomer = getAuthenticatedCustomer(req);
+    const verifiedPhone = authCustomer
+      ? authCustomer.phone
+      : customerPhone;
 
-    let depositRequired = 0;
-    if (paymentMethod === 'cash_on_delivery') {
-      depositRequired = 0;
-    } else if (settings.defaultDepositType === 'percentage') {
-      depositRequired = Math.round((finalTotal * (settings.defaultDepositValue || 20)) / 100);
-    } else if (settings.defaultDepositType === 'fixed') {
-      depositRequired = Math.min(settings.defaultDepositValue || 50, finalTotal);
-    }
+    try {
+      // Resolve the real Admin delivery-region ID.
+      const adminRegions = await fetchAdminRegions();
 
-    // CRITICAL: Treat depositPaid from client as UNTRUSTED and ignore it completely.
-    // Client cannot declare money as paid. Initial customer order is always depositPaid = 0.
-    const initialDepositPaid = 0;
-    const initialDepositStatus = (paymentMethod === 'cash_on_delivery' || depositRequired === 0) ? 'none' : 'pending';
-    const remainingAmount = finalTotal;
+      const normalizeText = (value: unknown) =>
+        String(value || '').trim().toLowerCase();
 
-    // 8. GENERATE USER-FRIENDLY, COLLISION-RESISTANT ORDER NUMBER
-    const initialOrderNumber = await generateUniqueOrderNumber(supabaseAdmin);
-    if (!initialOrderNumber) {
-      return res.status(500).json({
-        success: false,
-        error: 'تعذر توليد رقم طلب مميز وفريد حالياً. يرجى إعادة المحاولة خلال لحظات.'
-      });
-    }
+      const wantedGovernorate = normalizeText(governorate);
+      const wantedCity = normalizeText(city);
+      const wantedDistrict = normalizeText(district);
 
-    const orderId = `ord-${Date.now()}-${crypto.randomInt(100, 999)}`;
-
-    const newOrder: Order = {
-      id: orderId,
-      orderNumber: initialOrderNumber,
-      customerId,
-      customerName: customerName.trim(),
-      customerPhone: verifiedPhone,
-      governorate: governorate.trim(),
-      city: typeof city === 'string' ? city.trim() : '',
-      district: typeof district === 'string' ? district.trim() : '',
-      address: address.trim(),
-      notes: safeNotes,
-      items: verifiedOrderItems,
-      subtotal: calculatedSubtotal,
-      deliveryFee,
-      discountAmount,
-      couponCode: validatedCouponCode,
-      total: finalTotal,
-      paymentMethod,
-      depositRequired,
-      depositPaid: initialDepositPaid,
-      depositStatus: initialDepositStatus,
-      depositTransactionRef: safeTransactionRef,
-      remainingAmount,
-      status: 'new',
-      createdAt: new Date().toISOString(),
-      deliveryTargetDate: 'نفس اليوم مبرد 🚚',
-      isBeforeCutoff: true,
-      estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
-    };
-
-    // 9. SAFE DURABLE PERSISTENCE (EXACT MATCH WITH supabase-schema.sql)
-    // Persists into `orders` with unique collision retry, then persists all verified items into `order_items`.
-    // If order_items fails, performs compensating rollback deletion of parent order.
-    if (supabaseAdmin) {
-      try {
-        let orderInserted = false;
-        let candidateNumber = initialOrderNumber;
-        const maxInsertAttempts = 3;
-
-        for (let insertAttempt = 1; insertAttempt <= maxInsertAttempts; insertAttempt++) {
-          newOrder.orderNumber = candidateNumber;
-
-          const orderRow = {
-            id: newOrder.id,
-            order_number: candidateNumber,
-            customer_id: newOrder.customerId || null,
-            customer_name: newOrder.customerName,
-            customer_phone: newOrder.customerPhone,
-            governorate: newOrder.governorate,
-            city: newOrder.city || null,
-            district: newOrder.district || null,
-            address: newOrder.address,
-            notes: newOrder.notes || null,
-            subtotal: newOrder.subtotal,
-            delivery_fee: newOrder.deliveryFee,
-            discount_amount: newOrder.discountAmount,
-            coupon_code: newOrder.couponCode || null,
-            total: newOrder.total,
-            payment_method: newOrder.paymentMethod,
-            deposit_required: newOrder.depositRequired,
-            deposit_paid: newOrder.depositPaid,
-            deposit_status: newOrder.depositStatus,
-            deposit_transaction_ref: newOrder.depositTransactionRef || null,
-            remaining_amount: newOrder.remainingAmount,
-            status: newOrder.status,
-            created_at: newOrder.createdAt
-          };
-
-          const { error: orderInsertError } = await supabaseAdmin
-            .from('orders')
-            .insert(orderRow);
-
-          if (orderInsertError) {
-            // Check if this is an actual uniqueness collision on order_number
-            const isUniqueOrderNumberCollision = orderInsertError.code === '23505' &&
-              (orderInsertError.message?.includes('order_number') ||
-               orderInsertError.details?.includes('order_number') ||
-               orderInsertError.message?.includes('idx_orders_order_number_unique'));
-
-            if (isUniqueOrderNumberCollision && insertAttempt < maxInsertAttempts) {
-              console.warn(`[Order Persistence] Uniqueness collision on order_number (${candidateNumber}). Retrying with fresh number (attempt ${insertAttempt + 1})...`);
-              const freshCandidate = await generateUniqueOrderNumber(supabaseAdmin);
-              if (freshCandidate) {
-                candidateNumber = freshCandidate;
-                continue;
-              }
-            }
-
-            console.error('[Order Persistence] Failed to persist order row in Supabase:', orderInsertError);
-            return res.status(500).json({
-              success: false,
-              error: 'تعذر حفظ الطلب في قاعدة البيانات بشكل دائم. يرجى المحاولة لاحقاً أو التواصل هاتفياً مع المتجر.'
-            });
-          }
-
-          orderInserted = true;
-          break;
+      let matchingRegion = adminRegions.find((region) => {
+        if (
+          normalizeText(region.governorate) !== wantedGovernorate
+        ) {
+          return false;
         }
 
-        if (!orderInserted) {
-          return res.status(500).json({
-            success: false,
-            error: 'تعذر تسجيل الطلب بعد عدة محاولات بسبب تكرار رقم الطلب. يرجى إعادة المحاولة.'
-          });
-        }
+        return region.cities.some((regionName) => {
+          const normalized = normalizeText(regionName);
 
-        // Persist verified items into order_items matching supabase-schema.sql exactly
-        const orderItemRows = verifiedOrderItems.map(item => ({
-          order_id: newOrder.id,
-          product_id: item.productId,
-          variant_id: item.variantId || null,
-          product_name: item.productName,
-          variant_label: item.variantLabel || null,
-          price: item.price,
+          return (
+            (wantedCity && normalized === wantedCity) ||
+            (wantedDistrict && normalized === wantedDistrict)
+          );
+        });
+      });
+
+      if (!matchingRegion) {
+        const governorateRegions = adminRegions.filter(
+          (region) =>
+            normalizeText(region.governorate) === wantedGovernorate
+        );
+
+        if (governorateRegions.length === 1) {
+          matchingRegion = governorateRegions[0];
+        }
+      }
+
+      if (!matchingRegion) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'تعذر تحديد منطقة التوصيل بدقة. يرجى اختيار المنطقة من قائمة التوصيل المتاحة.',
+        });
+      }
+
+      const adminResult = await adminPublicPost<{
+        success: boolean;
+        message?: string;
+        order: {
+          id: string;
+          orderNumber: string;
+          customerName: string;
+          customerPhone: string;
+          customerAddress: string;
+          city?: string;
+          district?: string;
+          subtotal: number;
+          discountAmount: number;
+          couponCode?: string;
+          deliveryFee: number;
+          totalAmount: number;
+          depositAmount: number;
+          depositStatus: string;
+          depositMethod?: string;
+          depositReference?: string;
+          remainingAmount: number;
+          status: string;
+          notes?: string;
+          createdAt: string;
+          updatedAt?: string;
+          items: Array<{
+            productId: string;
+            variantId?: string;
+            productName: string;
+            variantTitle?: string;
+            pricingUnit: string;
+            unitPrice: number;
+            quantity: number;
+            totalPrice: number;
+          }>;
+        };
+      }>('/orders', {
+        customerName: customerName.trim(),
+        customerPhone: verifiedPhone,
+        customerAddress: address.trim(),
+        city:
+          typeof city === 'string' && city.trim()
+            ? city.trim()
+            : governorate.trim(),
+        district:
+          typeof district === 'string'
+            ? district.trim().slice(0, 100)
+            : '',
+        deliveryRegionId: matchingRegion.id,
+        items: items.map((item) => ({
+          productId: item.productId,
+          variantId: item.variantId,
           quantity: item.quantity,
-          item_total: item.itemTotal,
-          pieces_per_kilo_range: item.piecesPerKiloRange || null,
-          notes: item.notes || null
-        }));
+        })),
+        couponCode:
+          typeof couponCode === 'string'
+            ? couponCode.trim().slice(0, 30)
+            : undefined,
+        depositMethod: paymentMethod,
+        depositReference:
+          typeof depositTransactionRef === 'string'
+            ? depositTransactionRef.trim().slice(0, 100)
+            : undefined,
+        notes:
+          typeof notes === 'string'
+            ? notes.trim().slice(0, 500)
+            : undefined,
+      });
 
-        const { error: itemsInsertError } = await supabaseAdmin
-          .from('order_items')
-          .insert(orderItemRows);
+      const adminOrder = adminResult.order;
 
-        if (itemsInsertError) {
-          console.error('[Order Persistence] Failed to persist order items row in Supabase:', itemsInsertError);
-          // Compensating rollback: delete parent order to prevent orphan order rows
-          try {
-            const { error: delErr } = await supabaseAdmin.from('orders').delete().eq('id', newOrder.id);
-            if (delErr) {
-              console.error('[Order Persistence] Compensating rollback returned error during orphan cleanup:', delErr);
-            }
-          } catch (cleanupErr) {
-            console.error('[Order Persistence] Exception during compensating orphan order cleanup:', cleanupErr);
-          }
+      const statusMap: Record<string, Order['status']> = {
+        pending: 'new',
+        new: 'new',
+        preparing: 'preparing',
+        on_delivery: 'on_delivery',
+        delivered: 'delivered',
+        cancelled: 'cancelled',
+      };
 
-          return res.status(500).json({
-            success: false,
-            error: 'تعذر حفظ تفاصيل أصناف الطلب في قاعدة البيانات. يرجى إعادة المحاولة.'
-          });
-        }
-      } catch (dbErr) {
-        console.error('[Order Persistence] Exception during durable database insert:', dbErr);
-        return res.status(500).json({
+      const customerOrder: Order = {
+        id: adminOrder.id,
+        orderNumber: adminOrder.orderNumber,
+        customerName: adminOrder.customerName,
+        customerPhone: adminOrder.customerPhone,
+        governorate: governorate.trim(),
+        city: adminOrder.city || '',
+        district: adminOrder.district || '',
+        address: adminOrder.customerAddress,
+        notes: adminOrder.notes || '',
+        items: adminOrder.items.map((item) => ({
+          productId: item.productId,
+          variantId: item.variantId,
+          variantLabel: item.variantTitle,
+          productName: item.productName,
+          productImage: '',
+          unit:
+            item.pricingUnit === 'piece' ? 'قطعة' : 'كيلو',
+          price: Number(item.unitPrice || 0),
+          quantity: Number(item.quantity || 0),
+          itemTotal: Number(item.totalPrice || 0),
+        })),
+        subtotal: Number(adminOrder.subtotal || 0),
+        deliveryFee: Number(adminOrder.deliveryFee || 0),
+        discountAmount: Number(adminOrder.discountAmount || 0),
+        couponCode: adminOrder.couponCode,
+        total: Number(adminOrder.totalAmount || 0),
+        paymentMethod,
+        depositRequired: Number(adminOrder.depositAmount || 0),
+        depositPaid: 0,
+        depositStatus:
+          adminOrder.depositStatus === 'confirmed'
+            ? 'confirmed'
+            : adminOrder.depositStatus === 'rejected'
+              ? 'rejected'
+              : Number(adminOrder.depositAmount || 0) > 0
+                ? 'pending'
+                : 'none',
+        depositTransactionRef: adminOrder.depositReference,
+        remainingAmount: Number(adminOrder.remainingAmount || 0),
+        status: statusMap[adminOrder.status] || 'new',
+        createdAt: adminOrder.createdAt,
+      };
+
+      return res.status(201).json({
+        success: true,
+        message:
+          adminResult.message ||
+          'تم استلام طلبك بنجاح',
+        data: customerOrder,
+      });
+    } catch (err: any) {
+      const status = Number(err?.status);
+
+      if (
+        status === 400 ||
+        status === 403 ||
+        status === 404 ||
+        status === 429
+      ) {
+        const adminMessage =
+          err?.payload &&
+          typeof err.payload.error === 'string'
+            ? err.payload.error
+            : 'تعذر إنشاء الطلب بالبيانات الحالية';
+
+        return res.status(status).json({
           success: false,
-          error: 'حدث خطأ أثناء معالجة وحفظ الطلب. يرجى إعادة المحاولة.'
+          error: adminMessage,
         });
       }
-    } else {
-      const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
-      if (!allowInMemory) {
-        return res.status(503).json({
-          success: false,
-          error: 'خدمة تسجيل الطلبات الدائمة غير مهيأة حالياً في الخادم. يرجى التواصل مع المتجر مباشرة لتأكيد طلبك.'
-        });
-      }
+
+      console.error('[Admin API] Order creation failed:', err);
+
+      return res.status(503).json({
+        success: false,
+        error:
+          'تعذر إرسال الطلب إلى نظام الإدارة حالياً. لم يتم تسجيل الطلب، يرجى المحاولة مرة أخرى.',
+      });
     }
-
-    // Success: add to memory store for active runtime tracking
-    orders.unshift(newOrder);
-
-    res.status(201).json({
-      success: true,
-      message: 'تم استلام وتأكيد طلبك بنجاح وسيبدأ تجهيزه طازجاً فوراً',
-      data: newOrder
-    });
   });
 
   // ==========================================
