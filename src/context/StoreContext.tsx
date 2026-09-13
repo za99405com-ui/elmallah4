@@ -17,14 +17,12 @@ import {
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_SETTINGS, 
-  INITIAL_COUPONS, 
   INITIAL_REGIONS,
   fetchProductsFromSupabase,
   fetchDeliveryRegionsFromSupabase,
-  fetchStoreSettingsFromSupabase,
-  fetchCouponsFromSupabase 
+  fetchStoreSettingsFromSupabase
 } from '../data/initialData';
-import { api, getStoredCustomerToken } from '../utils/api';
+import { api, getStoredCustomerToken, setStoredCustomerToken } from '../utils/api';
 import { getOrCreateDeviceId } from '../utils/device';
 
 interface StoreContextType {
@@ -57,7 +55,7 @@ interface StoreContextType {
   appliedCoupon: Coupon | null;
   couponDiscount: number;
   couponError: string | null;
-  applyCoupon: (code: string) => boolean;
+  applyCoupon: (code: string) => Promise<boolean>;
   removeCoupon: () => void;
 
   // Delivery Regions
@@ -83,7 +81,7 @@ interface StoreContextType {
   reOrder: (order: Order) => void;
   currentTrackedOrder: Order | null;
   setCurrentTrackedOrder: (order: Order | null) => void;
-  refreshOrders: () => Promise<void>;
+  refreshOrders: (tokenOverride?: string) => Promise<void>;
 
   // Favorites
   favorites: string[];
@@ -195,20 +193,8 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [selectedCategory, setSelectedCategory] = useState<ProductCategory | 'all'>('all');
   const [selectedProductForModal, setSelectedProductForModal] = useState<Product | null>(null);
 
-  // Coupons
-  const [coupons, setCoupons] = useState<Coupon[]>(() => {
-    try {
-      const saved = localStorage.getItem('almallah_coupons_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return INITIAL_COUPONS;
-  });
-
+  // Coupons (Server-authoritative: browser only maintains applied coupon state)
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   const [couponError, setCouponError] = useState<string | null>(null);
 
@@ -443,17 +429,18 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
-  const refreshOrders = useCallback(async () => {
+  const refreshOrders = useCallback(async (tokenOverride?: string) => {
     try {
-      if (!currentUser) return;
+      const token = tokenOverride || getStoredCustomerToken();
+      if (!token) return;
       const res = await api.getMyOrders();
-      if (res.success && Array.isArray(res.data)) {
+      if (res && res.success && Array.isArray(res.data)) {
         setOrders(res.data);
       }
     } catch (err) {
       console.warn('Orders refresh notice:', err);
     }
-  }, [currentUser]);
+  }, []);
 
   const syncBackend = useCallback(async () => {
     setIsLoadingData(true);
@@ -480,11 +467,10 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       // 2. Fallback to direct client Supabase ONLY if backend returned no products or failed
       if (!backendProvidedProducts) {
-        const [supProducts, supRegions, supSettings, supCoupons] = await Promise.allSettled([
+        const [supProducts, supRegions, supSettings] = await Promise.allSettled([
           fetchProductsFromSupabase(),
           fetchDeliveryRegionsFromSupabase(),
-          fetchStoreSettingsFromSupabase(),
-          fetchCouponsFromSupabase()
+          fetchStoreSettingsFromSupabase()
         ]);
 
         if (supProducts.status === 'fulfilled' && supProducts.value.length > 0) {
@@ -496,21 +482,21 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (settingsRes.status !== 'fulfilled' && supSettings.status === 'fulfilled' && supSettings.value) {
           setStoreSettings(prev => ({ ...prev, ...supSettings.value }));
         }
-        if (supCoupons.status === 'fulfilled' && supCoupons.value.length > 0) {
-          setCoupons(supCoupons.value);
-        }
       }
 
-      // Sync customer account if token is stored
-      if (getStoredCustomerToken()) {
+      // 3. Restore authenticated customer and their durable historical orders
+      const storedToken = getStoredCustomerToken();
+      if (storedToken) {
         const meRes = await api.getMe();
-        if (meRes.success && meRes.customer) {
+        if (meRes && meRes.success && meRes.customer) {
           setCurrentUser(meRes.customer);
+          // Pass valid authenticated token directly to restore orders without closure race condition
+          await refreshOrders(storedToken);
+        } else {
+          setStoredCustomerToken(null);
+          setCurrentUser(null);
         }
       }
-
-      // Sync customer's orders
-      await refreshOrders();
     } catch (err) {
       console.warn('Backend sync note (using client persistence):', err);
     } finally {
@@ -566,35 +552,44 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setAppliedCoupon(null);
   };
 
-  // Coupon Actions
-  const applyCoupon = (code: string): boolean => {
+  // Coupon Actions (Server-Authoritative)
+  const applyCoupon = async (code: string): Promise<boolean> => {
     setCouponError(null);
     const cleanCode = code.trim().toUpperCase();
-    const found = coupons.find(c => c.code.toUpperCase() === cleanCode);
-
-    if (!found) {
-      setCouponError('كود الخصم غير صحيح');
-      return false;
-    }
-    if (!found.isActive) {
-      setCouponError('هذا الكوبون غير مفعّل حالياً');
-      return false;
-    }
-    if (found.expiryDate && new Date(found.expiryDate) < new Date()) {
-      setCouponError('انتهت صلاحية هذا الكوبون');
-      return false;
-    }
-    if (found.usageLimit && found.usageCount >= found.usageLimit) {
-      setCouponError('تم استنفاذ الحد الأقصى لاستخدام الكوبون');
-      return false;
-    }
-    if (found.minOrderAmount && cartSubtotal < found.minOrderAmount) {
-      setCouponError(`الحد الأدنى لتفعيل الكوبون هو ${found.minOrderAmount} جنيه`);
+    if (!cleanCode) {
+      setCouponError('يرجى إدخال كود الكوبون');
       return false;
     }
 
-    setAppliedCoupon(found);
-    return true;
+    try {
+      const res = await api.validateCoupon(cleanCode, cartSubtotal);
+      if (res && res.success && res.data) {
+        const validated = res.data;
+        const couponObj: Coupon = {
+          id: `c_${validated.code}`,
+          code: validated.code,
+          discountType: validated.discountType,
+          discountValue: validated.discountValue,
+          minOrderAmount: validated.minOrderAmount,
+          maxDiscount: validated.maxDiscount,
+          usageLimit: 0,
+          usageCount: 0,
+          isActive: true,
+          createdAt: new Date().toISOString()
+        };
+        setAppliedCoupon(couponObj);
+        setCouponError(null);
+        return true;
+      } else {
+        setAppliedCoupon(null);
+        setCouponError(res?.error || 'كود الخصم غير صالح أو منتهي الصلاحية');
+        return false;
+      }
+    } catch (err: any) {
+      setAppliedCoupon(null);
+      setCouponError(err?.message || 'تعذر التحقق من كود الخصم');
+      return false;
+    }
   };
 
   const removeCoupon = () => {
@@ -694,7 +689,11 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const res = await api.verifyOtp(payload);
     if (res.success && res.customer) {
       setCurrentUser(res.customer);
-      await refreshOrders();
+      if (res.token) {
+        await refreshOrders(res.token);
+      } else {
+        await refreshOrders();
+      }
     }
     return res;
   };
@@ -724,6 +723,8 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const logoutUser = async () => {
     await api.logout();
     setCurrentUser(null);
+    setOrders([]);
+    setCurrentTrackedOrder(null);
   };
 
   const updateUserAccount = async (data: Partial<CustomerUser>) => {

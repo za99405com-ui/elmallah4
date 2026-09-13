@@ -24,6 +24,7 @@ export const Cart: React.FC = () => {
     cartDepositRequired,
     appliedCoupon, 
     couponDiscount,
+    couponError: storeCouponError,
     applyCoupon, 
     removeCoupon,
     currentDeliveryFee,
@@ -36,17 +37,27 @@ export const Cart: React.FC = () => {
 
   const [couponCodeInput, setCouponCodeInput] = useState('');
   const [couponError, setCouponError] = useState('');
+  const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
 
-  const handleApplyCoupon = (e: React.FormEvent) => {
+  const handleApplyCoupon = async (e: React.FormEvent) => {
     e.preventDefault();
     setCouponError('');
-    if (!couponCodeInput.trim()) return;
-    const success = applyCoupon(couponCodeInput.trim());
-    if (success) {
-      setCouponCodeInput('');
-    } else {
-      setCouponError('كود الخصم غير صالح أو منتهي الصلاحية');
+    const clean = couponCodeInput.trim();
+    if (!clean) return;
+    setIsApplyingCoupon(true);
+    try {
+      const success = await applyCoupon(clean);
+      if (success) {
+        setCouponCodeInput('');
+        setCouponError('');
+      } else {
+        setCouponError(storeCouponError || 'كود الخصم غير صالح أو منتهي الصلاحية');
+      }
+    } catch {
+      setCouponError('تعذر التحقق من كود الخصم');
+    } finally {
+      setIsApplyingCoupon(false);
     }
   };
 

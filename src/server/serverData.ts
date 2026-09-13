@@ -121,11 +121,14 @@ export async function fetchServerCoupons(client: SupabaseClient | null): Promise
   try {
     const { data, error } = await client
       .from('coupons')
-      .select('*')
-      .eq('is_active', true);
+      .select('*');
 
-    if (error || !data || data.length === 0) {
+    if (error) {
       return INITIAL_COUPONS;
+    }
+
+    if (!data) {
+      return [];
     }
 
     return data.map((row) => ({
@@ -151,11 +154,14 @@ export async function fetchServerDeliveryRegions(client: SupabaseClient | null):
   try {
     const { data, error } = await client
       .from('delivery_regions')
-      .select('*')
-      .eq('is_active', true);
+      .select('*');
 
-    if (error || !data || data.length === 0) {
+    if (error) {
       return INITIAL_REGIONS;
+    }
+
+    if (!data) {
+      return [];
     }
 
     return data.map((row) => ({

@@ -33,15 +33,15 @@ let settings: StoreSettings = { ...INITIAL_SETTINGS };
 async function syncServerDataWithSupabase() {
   try {
     const synced = await syncAllServerData();
-    if (synced.products.length > 0) {
+    if (synced.products && synced.products.length > 0) {
       products = synced.products;
       console.log(`[Server Supabase] Loaded ${products.length} products`);
     }
-    if (synced.coupons.length > 0) {
+    if (Array.isArray(synced.coupons)) {
       coupons = synced.coupons;
       console.log(`[Server Supabase] Loaded ${coupons.length} coupons`);
     }
-    if (synced.regions.length > 0) {
+    if (synced.regions && synced.regions.length > 0) {
       regions = synced.regions;
       console.log(`[Server Supabase] Loaded ${regions.length} delivery regions`);
     }
@@ -50,8 +50,39 @@ async function syncServerDataWithSupabase() {
       console.log(`[Server Supabase] Loaded store settings`);
     }
   } catch (err) {
-    console.warn('Notice loading Supabase tables on server startup:', err);
+    console.warn('Notice loading Supabase tables on server:', err);
   }
+}
+
+// Lightweight Server-Side Refresh / TTL Cache (20s TTL)
+// Ensures prices, stock, coupons, delivery regions, and store settings remain fresh
+const SERVER_DATA_CACHE_TTL_MS = 20 * 1000; // 20 seconds TTL
+let lastServerDataSyncTime = 0;
+let syncInProgressPromise: Promise<void> | null = null;
+
+export async function ensureFreshServerData(): Promise<void> {
+  const now = Date.now();
+  if (now - lastServerDataSyncTime < SERVER_DATA_CACHE_TTL_MS && products.length > 0) {
+    return; // Cache is still fresh
+  }
+
+  // Deduplicate concurrent refresh calls (single in-flight promise)
+  if (syncInProgressPromise) {
+    return syncInProgressPromise;
+  }
+
+  syncInProgressPromise = (async () => {
+    try {
+      await syncServerDataWithSupabase();
+      lastServerDataSyncTime = Date.now();
+    } catch (err) {
+      console.warn('[Server Supabase Cache] Refresh notice:', err);
+    } finally {
+      syncInProgressPromise = null;
+    }
+  })();
+
+  return syncInProgressPromise;
 }
 
 // Customer Identity & Auth Store
@@ -389,6 +420,7 @@ export async function createServer() {
   // ==========================================
 
   app.get('/api/products', async (req, res) => {
+    await ensureFreshServerData();
     const { category, search, inStock } = req.query;
     let result = products.filter(p => p.isVisible !== false);
 
@@ -411,7 +443,8 @@ export async function createServer() {
     res.json({ success: true, count: result.length, data: result });
   });
 
-  app.get('/api/products/:id', (req, res) => {
+  app.get('/api/products/:id', async (req, res) => {
+    await ensureFreshServerData();
     const product = products.find(p => p.id === req.params.id && p.isVisible !== false);
     if (!product) {
       return res.status(404).json({ success: false, error: 'المنتج غير موجود أو غير متاح' });
@@ -425,37 +458,70 @@ export async function createServer() {
   // NEVER uses ?phone= for authorization
   // ==========================================
 
-  // Durable Supabase order fetcher for customer orders
+  type CustomerOrdersResult = 
+    | { status: 'success'; orders: Order[] }
+    | { status: 'error'; message: string };
+
+  // Durable Supabase order fetcher for customer orders using safe parameterized queries
   async function fetchOrdersFromSupabaseForCustomer(
     supabase: ReturnType<typeof getServerSupabase>,
     customerId?: string,
     customerPhone?: string
-  ): Promise<Order[] | null> {
-    if (!supabase) return null;
+  ): Promise<CustomerOrdersResult> {
+    if (!supabase) return { status: 'error', message: 'عميل قاعدة البيانات غير متصل' };
 
     try {
-      let query = supabase.from('orders').select('*');
-      if (customerId && customerPhone) {
-        query = query.or(`customer_id.eq.${customerId},customer_phone.eq.${customerPhone}`);
-      } else if (customerId) {
-        query = query.eq('customer_id', customerId);
-      } else if (customerPhone) {
-        query = query.eq('customer_phone', customerPhone);
-      } else {
-        return [];
+      const queries: Promise<any>[] = [];
+      if (customerId) {
+        queries.push(
+          supabase
+            .from('orders')
+            .select('*')
+            .eq('customer_id', customerId)
+            .order('created_at', { ascending: false })
+        );
+      }
+      if (customerPhone) {
+        queries.push(
+          supabase
+            .from('orders')
+            .select('*')
+            .eq('customer_phone', customerPhone)
+            .order('created_at', { ascending: false })
+        );
       }
 
-      const { data: orderRows, error: ordersErr } = await query.order('created_at', { ascending: false });
-      if (ordersErr) {
-        console.warn('[Orders Read] Supabase orders query error:', ordersErr);
-        return null;
+      if (queries.length === 0) {
+        return { status: 'success', orders: [] };
       }
 
-      if (!orderRows || orderRows.length === 0) {
-        return [];
+      const results = await Promise.all(queries);
+      const allRows: any[] = [];
+      const seenIds = new Set<string>();
+
+      for (const res of results) {
+        if (res.error) {
+          console.warn('[Orders Read] Supabase orders query error:', res.error);
+          return { status: 'error', message: res.error.message || 'خطأ في جلب الطلبات' };
+        }
+        if (Array.isArray(res.data)) {
+          for (const row of res.data) {
+            const rId = String(row.id);
+            if (!seenIds.has(rId)) {
+              seenIds.add(rId);
+              allRows.push(row);
+            }
+          }
+        }
       }
 
-      const orderIds = orderRows.map((r: any) => r.id);
+      if (allRows.length === 0) {
+        return { status: 'success', orders: [] };
+      }
+
+      allRows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      const orderIds = allRows.map((r: any) => r.id);
       const { data: itemRows, error: itemsErr } = await supabase
         .from('order_items')
         .select('*')
@@ -484,7 +550,7 @@ export async function createServer() {
         }
       }
 
-      return orderRows.map((r: any): Order => ({
+      const ordersList: Order[] = allRows.map((r: any): Order => ({
         id: String(r.id),
         orderNumber: r.order_number,
         customerId: r.customer_id || undefined,
@@ -513,35 +579,80 @@ export async function createServer() {
         isBeforeCutoff: true,
         estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
       }));
-    } catch (err) {
+
+      return { status: 'success', orders: ordersList };
+    } catch (err: any) {
       console.warn('[Orders Read] Supabase orders query exception:', err);
-      return null;
+      return { status: 'error', message: err?.message || 'استثناء أثناء جلب الطلبات' };
     }
   }
 
-  // Durable Supabase fetcher for single order
+  type SingleOrderResult = 
+    | { status: 'found'; order: Order }
+    | { status: 'not_found' }
+    | { status: 'error'; message: string };
+
+  // Durable Supabase fetcher for single order using safe parameterized queries
   async function fetchSingleOrderFromSupabase(
     supabase: ReturnType<typeof getServerSupabase>,
     orderIdOrNumber: string
-  ): Promise<Order | null> {
-    if (!supabase) return null;
+  ): Promise<SingleOrderResult> {
+    if (!supabase) return { status: 'error', message: 'عميل قاعدة البيانات غير متصل' };
+
+    const cleanInput = (orderIdOrNumber || '').trim();
+    if (!cleanInput) return { status: 'not_found' };
 
     try {
-      const { data: orderRow, error: orderErr } = await supabase
+      let orderRow: any = null;
+
+      // 1. Safe query by id using exact .eq()
+      const { data: byId, error: errId } = await supabase
         .from('orders')
         .select('*')
-        .or(`id.eq.${orderIdOrNumber},order_number.eq.${orderIdOrNumber}`)
+        .eq('id', cleanInput)
         .limit(1)
         .maybeSingle();
 
-      if (orderErr || !orderRow) {
-        return null;
+      if (errId) {
+        console.warn('[Single Order Read] Query by id error:', errId);
+      } else if (byId) {
+        orderRow = byId;
       }
 
-      const { data: itemRows } = await supabase
+      // 2. If not found by id, safe query by order_number using exact .eq()
+      if (!orderRow) {
+        const { data: byNumber, error: errNumber } = await supabase
+          .from('orders')
+          .select('*')
+          .eq('order_number', cleanInput)
+          .limit(1)
+          .maybeSingle();
+
+        if (errNumber) {
+          console.warn('[Single Order Read] Query by order_number error:', errNumber);
+          if (errId) {
+            return { status: 'error', message: errNumber.message || 'خطأ في قاعدة البيانات' };
+          }
+        } else if (byNumber) {
+          orderRow = byNumber;
+        }
+      }
+
+      if (!orderRow) {
+        if (errId) {
+          return { status: 'error', message: errId.message || 'خطأ في قاعدة البيانات' };
+        }
+        return { status: 'not_found' };
+      }
+
+      const { data: itemRows, error: itemsErr } = await supabase
         .from('order_items')
         .select('*')
         .eq('order_id', orderRow.id);
+
+      if (itemsErr) {
+        console.warn('[Single Order Read] Order items query error:', itemsErr);
+      }
 
       const items: OrderItem[] = (itemRows || []).map((item: any) => {
         const matchedProd = products.find(p => p.id === item.product_id);
@@ -560,7 +671,7 @@ export async function createServer() {
         };
       });
 
-      return {
+      const order: Order = {
         id: String(orderRow.id),
         orderNumber: orderRow.order_number,
         customerId: orderRow.customer_id || undefined,
@@ -589,9 +700,11 @@ export async function createServer() {
         isBeforeCutoff: true,
         estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
       };
-    } catch (err) {
+
+      return { status: 'found', order };
+    } catch (err: any) {
       console.warn('[Single Order Read] Exception querying Supabase:', err);
-      return null;
+      return { status: 'error', message: err?.message || 'استثناء أثناء استرجاع تفاصيل الطلب' };
     }
   }
 
@@ -606,13 +719,22 @@ export async function createServer() {
     }
 
     const supabaseAdmin = getServerSupabase();
-    const dbOrders = await fetchOrdersFromSupabaseForCustomer(supabaseAdmin, customer.id, customer.phone);
+    const result = await fetchOrdersFromSupabaseForCustomer(supabaseAdmin, customer.id, customer.phone);
 
-    if (dbOrders !== null) {
-      return res.json({ success: true, count: dbOrders.length, data: dbOrders });
+    if (result.status === 'success') {
+      return res.json({ success: true, count: result.orders.length, data: result.orders });
     }
 
-    // Fallback to in-memory orders if Supabase unavailable
+    // Supabase read failed / database error
+    const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
+    if (!allowInMemory) {
+      return res.status(503).json({
+        success: false,
+        error: 'خدمة استرجاع سجل الطلبات غير متاحة حالياً بسبب تعذر الاتصال بقاعدة البيانات الدائمة. يرجى إعادة المحاولة لاحقاً.'
+      });
+    }
+
+    // Fallback to in-memory orders ONLY when explicitly allowed
     const myOrders = orders.filter(o => {
       const matchId = o.customerId && o.customerId === customer.id;
       const matchPhone = o.customerPhone && normalizeEgyptianPhone(o.customerPhone) === customer.phone;
@@ -634,29 +756,65 @@ export async function createServer() {
     }
 
     const orderId = req.params.id;
+    if (!orderId || typeof orderId !== 'string') {
+      return res.status(400).json({ success: false, error: 'معرف الطلب غير صالح' });
+    }
+
     const supabaseAdmin = getServerSupabase();
-    let order: Order | null = null;
+    const dbResult = await fetchSingleOrderFromSupabase(supabaseAdmin, orderId);
 
-    if (supabaseAdmin) {
-      order = await fetchSingleOrderFromSupabase(supabaseAdmin, orderId);
+    if (dbResult.status === 'found') {
+      const order = dbResult.order;
+      const orderPhone = normalizeEgyptianPhone(order.customerPhone);
+      const isOwner = (order.customerId && order.customerId === customer.id) || (orderPhone === customer.phone);
+
+      if (!isOwner) {
+        // Safe 404 for other customers' orders (IDOR protection)
+        return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
+      }
+
+      return res.json({ success: true, data: order });
     }
 
-    if (!order) {
-      order = orders.find(o => o.id === orderId || o.orderNumber === orderId) || null;
-    }
-
-    if (!order) {
+    if (dbResult.status === 'not_found') {
+      const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
+      if (allowInMemory) {
+        const memOrder = orders.find(o => o.id === orderId.trim() || o.orderNumber === orderId.trim());
+        if (memOrder) {
+          const orderPhone = normalizeEgyptianPhone(memOrder.customerPhone);
+          const isOwner = (memOrder.customerId && memOrder.customerId === customer.id) || (orderPhone === customer.phone);
+          if (!isOwner) {
+            return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
+          }
+          return res.json({ success: true, data: memOrder });
+        }
+      }
       return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
 
-    const orderPhone = normalizeEgyptianPhone(order.customerPhone);
-    const isOwner = (order.customerId && order.customerId === customer.id) || (orderPhone === customer.phone);
+    // dbResult.status === 'error'
+    const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
+    if (!allowInMemory) {
+      return res.status(503).json({
+        success: false,
+        error: 'خدمة استرجاع تفاصيل الطلب غير متاحة حالياً بسبب تعذر الاتصال بقاعدة البيانات الدائمة. يرجى إعادة المحاولة لاحقاً.'
+      });
+    }
+
+    // In-memory fallback allowed for dev/tests
+    const memOrder = orders.find(o => o.id === orderId.trim() || o.orderNumber === orderId.trim());
+    if (!memOrder) {
+      return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
+    }
+
+    const orderPhone = normalizeEgyptianPhone(memOrder.customerPhone);
+    const isOwner = (memOrder.customerId && memOrder.customerId === customer.id) || (orderPhone === customer.phone);
 
     if (!isOwner) {
       return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
 
-    res.json({ success: true, data: order });
+    res.json({ success: true, data: memOrder });
   });
 
   // ==========================================
@@ -799,6 +957,9 @@ export async function createServer() {
   }
 
   app.post('/api/orders', async (req, res) => {
+    // Refresh server data if cache expired before validating store state, pricing, or stock
+    await ensureFreshServerData();
+
     // 1. STORE CLOSED ENFORCEMENT
     if (settings.isStoreOpen === false) {
       return res.status(403).json({
@@ -1020,9 +1181,10 @@ export async function createServer() {
     if (safeCouponCode) {
       const coupon = coupons.find(c => c.code.trim().toUpperCase() === safeCouponCode.toUpperCase() && c.isActive);
       if (coupon) {
+        const notExpired = !coupon.expiryDate || new Date(coupon.expiryDate) >= new Date();
         const isEligible = !coupon.minOrderAmount || calculatedSubtotal >= coupon.minOrderAmount;
         const withinLimit = !coupon.usageLimit || coupon.usageCount < coupon.usageLimit;
-        if (isEligible && withinLimit) {
+        if (notExpired && isEligible && withinLimit) {
           if (coupon.discountType === 'percentage') {
             let d = (calculatedSubtotal * coupon.discountValue) / 100;
             if (coupon.maxDiscount && d > coupon.maxDiscount) d = coupon.maxDiscount;
@@ -1236,7 +1398,8 @@ export async function createServer() {
   // COUPONS API (Validation only for customer)
   // ==========================================
 
-  app.post('/api/coupons/validate', (req, res) => {
+  app.post('/api/coupons/validate', async (req, res) => {
+    await ensureFreshServerData();
     const { code, cartTotal } = req.body;
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ success: false, error: 'يرجى إدخال كود الكوبون' });
@@ -1249,6 +1412,10 @@ export async function createServer() {
 
     if (!coupon.isActive) {
       return res.status(400).json({ success: false, error: 'هذا الكوبون غير مفعّل حالياً' });
+    }
+
+    if (coupon.expiryDate && new Date(coupon.expiryDate) < new Date()) {
+      return res.status(400).json({ success: false, error: 'انتهت صلاحية هذا الكوبون' });
     }
 
     const rawTotal = Number(cartTotal);
@@ -1277,11 +1444,13 @@ export async function createServer() {
 
     res.json({
       success: true,
-      message: `تم تطبيق كود الخصم بنجاح: خصم ${discount} جنيه`,
+      message: `تم تطبيق كود الخصم بنجاح: خصم ${Math.round(discount * 10) / 10} جنيه`,
       data: {
         code: coupon.code,
         discountType: coupon.discountType,
         discountValue: coupon.discountValue,
+        minOrderAmount: coupon.minOrderAmount,
+        maxDiscount: coupon.maxDiscount,
         discountAmount: Math.round(discount * 10) / 10
       }
     });
@@ -1291,12 +1460,14 @@ export async function createServer() {
   // REGIONS & SETTINGS (Public Customer info)
   // ==========================================
 
-  app.get('/api/regions', (req, res) => {
+  app.get('/api/regions', async (req, res) => {
+    await ensureFreshServerData();
     const active = regions.filter(r => r.isActive);
     res.json({ success: true, count: active.length, data: active });
   });
 
-  app.get('/api/settings', (req, res) => {
+  app.get('/api/settings', async (req, res) => {
+    await ensureFreshServerData();
     const safeSettings: StoreSettings = {
       cutoffHour: settings.cutoffHour,
       cutoffMinute: settings.cutoffMinute,
