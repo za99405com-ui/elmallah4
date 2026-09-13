@@ -739,113 +739,226 @@ export async function createServer() {
     }
   }
 
-  // A) GET /api/customer/orders: Strictly restricted to authenticated customer
+  type AdminIntegrationOrder = {
+    id: string;
+    orderNumber: string;
+    customerId?: string;
+    customerName: string;
+    customerPhone: string;
+    customerAddress: string;
+    city?: string;
+    district?: string;
+    subtotal: number;
+    discountAmount: number;
+    couponCode?: string;
+    deliveryFee: number;
+    totalAmount: number;
+    depositAmount: number;
+    depositStatus?: string;
+    depositMethod?: string;
+    depositReference?: string;
+    remainingAmount: number;
+    status: string;
+    notes?: string;
+    createdAt: string;
+    updatedAt?: string;
+    items: Array<{
+      id?: string;
+      productId: string;
+      variantId?: string;
+      productName: string;
+      variantTitle?: string;
+      pricingUnit: string;
+      weightKg?: number;
+      pieceCount?: number;
+      unitPrice: number;
+      quantity: number;
+      totalPrice: number;
+    }>;
+  };
+
+  const mapAdminIntegrationOrder = (
+    adminOrder: AdminIntegrationOrder
+  ): Order => {
+    const statusMap: Record<string, Order['status']> = {
+      pending: 'new',
+      new: 'new',
+      preparing: 'preparing',
+      delivering: 'on_delivery',
+      on_delivery: 'on_delivery',
+      completed: 'delivered',
+      delivered: 'delivered',
+      cancelled: 'cancelled',
+    };
+
+    const depositStatus: Order['depositStatus'] =
+      adminOrder.depositStatus === 'confirmed'
+        ? 'confirmed'
+        : adminOrder.depositStatus === 'rejected'
+          ? 'rejected'
+          : adminOrder.depositStatus === 'not_required' ||
+              Number(adminOrder.depositAmount || 0) <= 0
+            ? 'none'
+            : 'pending';
+
+    const rawPaymentMethod = adminOrder.depositMethod;
+    const paymentMethod: PaymentMethod =
+      rawPaymentMethod === 'cash_on_delivery' ||
+      rawPaymentMethod === 'vodafone_cash' ||
+      rawPaymentMethod === 'instapay'
+        ? rawPaymentMethod
+        : 'instapay';
+
+    return {
+      id: String(adminOrder.id),
+      orderNumber: adminOrder.orderNumber,
+      customerId: adminOrder.customerId,
+      customerName: adminOrder.customerName,
+      customerPhone: adminOrder.customerPhone,
+      governorate: adminOrder.city || '',
+      city: adminOrder.city || '',
+      district: adminOrder.district || '',
+      address: adminOrder.customerAddress || '',
+      notes: adminOrder.notes || '',
+      items: (adminOrder.items || []).map((item) => ({
+        productId: item.productId,
+        variantId: item.variantId,
+        variantLabel: item.variantTitle,
+        productName: item.productName,
+        productImage: '',
+        unit:
+          item.pricingUnit === 'piece'
+            ? 'قطعة'
+            : 'كيلو',
+        price: Number(item.unitPrice || 0),
+        quantity: Number(item.quantity || 0),
+        itemTotal: Number(item.totalPrice || 0),
+      })),
+      subtotal: Number(adminOrder.subtotal || 0),
+      deliveryFee: Number(adminOrder.deliveryFee || 0),
+      discountAmount: Number(adminOrder.discountAmount || 0),
+      couponCode: adminOrder.couponCode,
+      total: Number(adminOrder.totalAmount || 0),
+      paymentMethod,
+      depositRequired: Number(adminOrder.depositAmount || 0),
+      depositPaid:
+        depositStatus === 'confirmed'
+          ? Number(adminOrder.depositAmount || 0)
+          : 0,
+      depositStatus,
+      depositTransactionRef: adminOrder.depositReference,
+      remainingAmount: Number(adminOrder.remainingAmount || 0),
+      status: statusMap[adminOrder.status] || 'new',
+      createdAt: adminOrder.createdAt,
+      deliveryTargetDate: 'نفس اليوم مبرد 🚚',
+      isBeforeCutoff: true,
+      estimatedDeliveryTime: 'خلال اليوم صيد مبرد',
+    };
+  };
+
+  // A) GET /api/customer/orders
+  // Authenticated session phone is the ONLY customer identifier sent to Admin.
   app.get('/api/customer/orders', async (req, res) => {
     const customer = getAuthenticatedCustomer(req);
+
     if (!customer) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'غير مصرح: يرجى تسجيل الدخول لعرض قائمة طلباتك' 
+      return res.status(401).json({
+        success: false,
+        error: 'غير مصرح: يرجى تسجيل الدخول لعرض قائمة طلباتك',
       });
     }
 
-    const supabaseAdmin = getServerSupabase();
-    const result = await fetchOrdersFromSupabaseForCustomer(supabaseAdmin, customer.id, customer.phone);
+    try {
+      const result = await adminIntegrationPost<{
+        orders: AdminIntegrationOrder[];
+      }>('/integration/customer/orders', {
+        phone: customer.phone,
+      });
 
-    if (result.status === 'success') {
-      return res.json({ success: true, count: result.orders.length, data: result.orders });
-    }
+      const customerOrders = (result.orders || []).map(
+        mapAdminIntegrationOrder
+      );
 
-    // Supabase read failed / database error
-    const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
-    if (!allowInMemory) {
+      return res.json({
+        success: true,
+        count: customerOrders.length,
+        data: customerOrders,
+      });
+    } catch (err) {
+      console.error('[Admin API] Failed to load customer orders:', err);
+
       return res.status(503).json({
         success: false,
-        error: 'خدمة استرجاع سجل الطلبات غير متاحة حالياً بسبب تعذر الاتصال بقاعدة البيانات الدائمة. يرجى إعادة المحاولة لاحقاً.'
+        error:
+          'خدمة استرجاع سجل الطلبات غير متاحة حالياً. يرجى إعادة المحاولة لاحقاً.',
       });
     }
-
-    // Fallback to in-memory orders ONLY when explicitly allowed
-    const myOrders = orders.filter(o => {
-      const matchId = o.customerId && o.customerId === customer.id;
-      const matchPhone = o.customerPhone && normalizeEgyptianPhone(o.customerPhone) === customer.phone;
-      return matchId || matchPhone;
-    });
-
-    myOrders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    res.json({ success: true, count: myOrders.length, data: myOrders });
   });
 
-  // B) GET /api/orders/:id: Strictly authenticated and ownership-verified
+  // B) GET /api/orders/:id
+  // Ownership is enforced by Admin using order id/number + authenticated phone.
   app.get('/api/orders/:id', async (req, res) => {
     const customer = getAuthenticatedCustomer(req);
+
     if (!customer) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'غير مصرح: يرجى تسجيل الدخول أولاً للوصول إلى تفاصيل الطلب' 
+      return res.status(401).json({
+        success: false,
+        error:
+          'غير مصرح: يرجى تسجيل الدخول أولاً للوصول إلى تفاصيل الطلب',
       });
     }
 
-    const orderId = req.params.id;
-    if (!orderId || typeof orderId !== 'string') {
-      return res.status(400).json({ success: false, error: 'معرف الطلب غير صالح' });
+    const orderIdOrNumber = req.params.id;
+
+    if (
+      !orderIdOrNumber ||
+      typeof orderIdOrNumber !== 'string' ||
+      !orderIdOrNumber.trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'معرف الطلب غير صالح',
+      });
     }
 
-    const supabaseAdmin = getServerSupabase();
-    const dbResult = await fetchSingleOrderFromSupabase(supabaseAdmin, orderId);
+    try {
+      const result = await adminIntegrationPost<{
+        order: AdminIntegrationOrder;
+      }>('/integration/orders/lookup', {
+        orderIdOrNumber: orderIdOrNumber.trim(),
+        phone: customer.phone,
+      });
 
-    if (dbResult.status === 'found') {
-      const order = dbResult.order;
-      const orderPhone = normalizeEgyptianPhone(order.customerPhone);
-      const isOwner = (order.customerId && order.customerId === customer.id) || (orderPhone === customer.phone);
+      return res.json({
+        success: true,
+        data: mapAdminIntegrationOrder(result.order),
+      });
+    } catch (err: any) {
+      const status = Number(err?.status);
 
-      if (!isOwner) {
-        // Safe 404 for other customers' orders (IDOR protection)
-        return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
+      if (status === 404) {
+        // Safe 404 also prevents leaking another customer's order.
+        return res.status(404).json({
+          success: false,
+          error: 'الطلب غير موجود',
+        });
       }
 
-      return res.json({ success: true, data: order });
-    }
-
-    if (dbResult.status === 'not_found') {
-      const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
-      if (allowInMemory) {
-        const memOrder = orders.find(o => o.id === orderId.trim() || o.orderNumber === orderId.trim());
-        if (memOrder) {
-          const orderPhone = normalizeEgyptianPhone(memOrder.customerPhone);
-          const isOwner = (memOrder.customerId && memOrder.customerId === customer.id) || (orderPhone === customer.phone);
-          if (!isOwner) {
-            return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
-          }
-          return res.json({ success: true, data: memOrder });
-        }
+      if (status === 400) {
+        return res.status(400).json({
+          success: false,
+          error: 'معرف الطلب غير صالح',
+        });
       }
-      return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
-    }
 
-    // dbResult.status === 'error'
-    const allowInMemory = process.env.ALLOW_IN_MEMORY_ORDERS === 'true';
-    if (!allowInMemory) {
+      console.error('[Admin API] Failed to load order details:', err);
+
       return res.status(503).json({
         success: false,
-        error: 'خدمة استرجاع تفاصيل الطلب غير متاحة حالياً بسبب تعذر الاتصال بقاعدة البيانات الدائمة. يرجى إعادة المحاولة لاحقاً.'
+        error:
+          'خدمة استرجاع تفاصيل الطلب غير متاحة حالياً. يرجى إعادة المحاولة لاحقاً.',
       });
     }
-
-    // In-memory fallback allowed for dev/tests
-    const memOrder = orders.find(o => o.id === orderId.trim() || o.orderNumber === orderId.trim());
-    if (!memOrder) {
-      return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
-    }
-
-    const orderPhone = normalizeEgyptianPhone(memOrder.customerPhone);
-    const isOwner = (memOrder.customerId && memOrder.customerId === customer.id) || (orderPhone === customer.phone);
-
-    if (!isOwner) {
-      return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
-    }
-
-    res.json({ success: true, data: memOrder });
   });
 
   // ==========================================
