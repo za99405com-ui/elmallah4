@@ -4,7 +4,8 @@ import {
   DeliveryRegion, 
   StoreSettings, 
   CustomerUser, 
-  CreateOrderPayload 
+  CreateOrderPayload,
+  StoreCategory
 } from '../types';
 
 const API_BASE = '/api';
@@ -149,6 +150,16 @@ export const api = {
       return data;
     } catch (e: any) {
       console.error('Failed to fetch products:', e);
+      return { success: false, data: [] };
+    }
+  },
+
+  async getCategories(): Promise<{ success: boolean; data: StoreCategory[] }> {
+    try {
+      const res = await fetch(`${API_BASE}/categories`);
+      return await res.json();
+    } catch (e) {
+      console.error('Failed to fetch categories:', e);
       return { success: false, data: [] };
     }
   },

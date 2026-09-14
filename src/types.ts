@@ -1,11 +1,6 @@
 export type ProductUnit = 'كيلو' | 'نصف كيلو' | 'قطعة' | 'علبة' | 'طاجن';
 
-export type ProductCategory = 
-  | 'fresh_sea'        // أسماك بحرية فاخرة
-  | 'fresh_lake'       // بلطي وبوري طازة
-  | 'shrimp_seafood'   // جمبري وفواكه بحر
-  | 'fillet'           // فيليه طازج
-  | 'offers';          // باقات وعروض طازة
+export type ProductCategory = string;
 
 /**
  * Product Variant (خيار البيع والحجم وعدد القطع)
@@ -204,10 +199,17 @@ export interface CustomerUser {
 export type UserAccount = CustomerUser;
 
 export interface StoreCategory {
-  id: ProductCategory;
+  id: string;
   name: string;
-  emoji: string;
-  image: string;
+
+  // Admin-controlled category fields
+  slug?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+
+  // Legacy presentation fields kept optional for compatibility
+  emoji?: string;
+  image?: string;
   countBadge?: string;
 }
 

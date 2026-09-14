@@ -70,7 +70,7 @@ export const ProductDetailModal: React.FC = () => {
             src={product.image}
             alt={product.name}
             referrerPolicy="no-referrer"
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain p-2"
           />
 
           <div className="absolute top-3 right-3 flex flex-col gap-1">

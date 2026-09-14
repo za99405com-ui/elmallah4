@@ -12,12 +12,11 @@ import { FavoritesView } from '../components/FavoritesView';
 import { SettingsView } from '../components/SettingsView';
 import { AboutPage, DeliveryPolicyPage, ContactPage } from '../components/InfoPages';
 import { Footer } from '../components/Footer';
-import { STORE_CATEGORIES } from '../data/initialData';
 import { 
   MessageCircle, 
   ShoppingCart
 } from 'lucide-react';
-import { Product, ProductCategory } from '../types';
+import { Product, ProductCategory, StoreCategory } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
 
 /* -------------------------------------------------------------------------- */
@@ -25,16 +24,19 @@ import { getWhatsAppLink } from '../utils/whatsapp';
 /* -------------------------------------------------------------------------- */
 interface ProductsCatalogViewProps {
   visibleProducts: Product[];
+  categories: StoreCategory[];
   selectedCategory: ProductCategory | 'all';
   onSelectCategory: (cat: ProductCategory | 'all') => void;
 }
 
 const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
   visibleProducts,
+  categories,
   selectedCategory,
   onSelectCategory
 }) => {
   const { isLoadingData, loadDirectFromSupabase } = useStore();
+
   const filteredProducts = useMemo(() => {
     if (selectedCategory === 'all') {
       return visibleProducts;
@@ -45,107 +47,72 @@ const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
     );
   }, [visibleProducts, selectedCategory]);
 
-  const handleResetFilters = useCallback(() => {
-    onSelectCategory('all');
-  }, [onSelectCategory]);
-
   return (
-    <div className="space-y-4">
-      {/* Categories only — products start immediately below */}
-      <div className="w-full overflow-hidden">
+    <div className="space-y-3">
+      {/* Categories come only from Admin */}
+      {categories.length > 1 && (
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
           <button
+            type="button"
             onClick={() => onSelectCategory('all')}
-            className={`px-3.5 py-2 rounded-xl font-bold text-xs transition-all shrink-0 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-xl font-bold text-xs shrink-0 ${
               selectedCategory === 'all'
-                ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-950 shadow-2xs'
-                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800'
+                ? 'bg-white text-slate-950'
+                : 'bg-slate-900 text-slate-300 border border-slate-700'
             }`}
           >
-            🐟 كل الأسماك ({visibleProducts.length})
+            كل المنتجات
           </button>
 
-          {STORE_CATEGORIES.map((cat) => {
+          {categories.map((cat) => {
+            const value = cat.slug || cat.id;
             const count = visibleProducts.filter(
-              (product) => product.category === cat.id
+              (product) => product.category === value
             ).length;
-            const isSelected = selectedCategory === cat.id;
 
             return (
               <button
+                type="button"
                 key={cat.id}
-                onClick={() => onSelectCategory(cat.id)}
-                className={`px-3.5 py-2 rounded-xl font-bold text-xs transition-all shrink-0 cursor-pointer ${
-                  isSelected
-                    ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-950 shadow-2xs'
-                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800'
+                onClick={() => onSelectCategory(value)}
+                className={`px-3 py-1.5 rounded-xl font-bold text-xs shrink-0 ${
+                  selectedCategory === value
+                    ? 'bg-white text-slate-950'
+                    : 'bg-slate-900 text-slate-300 border border-slate-700'
                 }`}
               >
-                <span>{cat.emoji}</span>
-                <span className="mr-1">{cat.name}</span>
-                <span className="text-[10px] opacity-70 mr-1">
-                  ({count})
-                </span>
+                {cat.name} ({count})
               </button>
             );
           })}
         </div>
-      </div>
+      )}
 
-      {/* Grid of Products or Skeleton / Empty */}
       {isLoadingData && visibleProducts.length === 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4">
           {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 space-y-3 animate-pulse">
-              <div className="w-full aspect-4/3 bg-slate-200 dark:bg-slate-800 rounded-xl" />
-              <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded-md w-3/4" />
-              <div className="h-3 bg-slate-200 dark:bg-slate-800 rounded-md w-1/2" />
-              <div className="h-8 bg-slate-200 dark:bg-slate-800 rounded-xl w-full" />
-            </div>
+            <div
+              key={i}
+              className="aspect-[3/4] bg-slate-200 dark:bg-slate-900 rounded-2xl animate-pulse"
+            />
           ))}
         </div>
       ) : filteredProducts.length === 0 ? (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 sm:p-12 text-center border border-slate-200 dark:border-slate-800 space-y-4">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 text-center border border-slate-200 dark:border-slate-800 space-y-3">
           <span className="text-4xl block">🐟</span>
           <h3 className="font-bold text-base text-slate-900 dark:text-white">
-            {visibleProducts.length === 0 ? 'قائمة صيد اليوم قيد التحديث' : 'لا توجد منتجات في هذا التصنيف حالياً'}
+            لا توجد منتجات متاحة حالياً
           </h3>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
-            {visibleProducts.length === 0 
-              ? 'يتم تحديث تشكيلة الأسماك والمأكولات البحرية الطازجة حالياً. يمكنكم أيضاً التواصل معنا مباشرة عبر واتساب للاستفسار وحجز طلبكم.'
-              : 'اختر تصنيفاً آخر أو اعرض كل المنتجات'}
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
-            {visibleProducts.length === 0 ? (
-              <>
-                <a
-                  href={getWhatsAppLink('مرحباً متجر الملاح، أود الاستفسار عن الأسماك المتوفرة اليوم للحجز والطلب.')}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-2xs inline-flex items-center gap-2"
-                >
-                  <MessageCircle className="w-4 h-4" />
-                  <span>تواصل عبر واتساب</span>
-                </a>
-                <button
-                  onClick={loadDirectFromSupabase}
-                  className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs rounded-xl cursor-pointer transition-colors"
-                >
-                  تحديث القائمة 🔄
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={handleResetFilters}
-                className="px-4 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
-              >
-                عرض كل الأسماك
-              </button>
-            )}
-          </div>
+
+          <button
+            onClick={loadDirectFromSupabase}
+            className="px-4 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-950 font-bold text-xs rounded-xl"
+          >
+            تحديث المنتجات
+          </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4">
           {filteredProducts.map((product) => (
             <ProductCard key={product.id} product={product} />
           ))}
@@ -154,6 +121,7 @@ const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
     </div>
   );
 });
+
 ProductsCatalogView.displayName = 'ProductsCatalogView';
 
 /* -------------------------------------------------------------------------- */
@@ -211,6 +179,7 @@ export const CustomerStoreApp: React.FC = () => {
     activeTab, 
     setActiveTab, 
     visibleProducts,
+    categories,
     selectedCategory, 
     setSelectedCategory,
     cartCount,
@@ -254,6 +223,7 @@ export const CustomerStoreApp: React.FC = () => {
         {activeTab === 'products' && (
           <ProductsCatalogView
             visibleProducts={visibleProducts}
+            categories={categories}
             selectedCategory={selectedCategory}
             onSelectCategory={handleSelectCategory}
           />

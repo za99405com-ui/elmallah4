@@ -20,6 +20,7 @@ import type {
 import { getServerSupabase } from './src/server/supabaseAdmin.js';
 import {
   fetchAdminProducts,
+  fetchAdminCategories,
   fetchAdminRegions,
   fetchAdminSettings,
 } from './src/server/adminData.js';
@@ -427,6 +428,24 @@ export async function createServer() {
   // ==========================================
   // PRODUCTS API
   // ==========================================
+
+  app.get('/api/categories', async (_req, res) => {
+    try {
+      const data = await fetchAdminCategories();
+      return res.json({
+        success: true,
+        count: data.length,
+        data,
+      });
+    } catch (err) {
+      console.error('[Admin API] Failed to load categories:', err);
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر تحميل التصنيفات من نظام الإدارة حالياً',
+        data: [],
+      });
+    }
+  });
 
   app.get('/api/products', async (req, res) => {
     try {

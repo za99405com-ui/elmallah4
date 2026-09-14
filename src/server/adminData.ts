@@ -4,6 +4,7 @@ import type {
   ProductVariant,
   DeliveryRegion,
   StoreSettings,
+  StoreCategory,
 } from '../types.js';
 import { adminPublicGet } from './adminApi.js';
 
@@ -11,6 +12,9 @@ type AdminCategory = {
   id: string;
   name: string;
   slug: string;
+  sortOrder?: number;
+  sort_order?: number;
+  isActive?: boolean;
   is_active?: number | boolean;
 };
 
@@ -139,7 +143,7 @@ function mapProduct(
   return {
     id: String(p.id),
     name: p.name,
-    category: mapCategory(category?.slug, category?.name || p.categoryName),
+    category: category?.slug || mapCategory(undefined, p.categoryName),
     price: Number(p.price || 0),
     unit: p.pricingUnit === 'piece' ? 'قطعة' : 'كيلو',
     // Admin is the authoritative source for product availability.
@@ -204,6 +208,26 @@ export async function fetchAdminProducts(): Promise<Product[]> {
   return products
     .map((product) => mapProduct(product, categoriesById))
     .filter((product) => product.isVisible);
+}
+
+export async function fetchAdminCategories(): Promise<StoreCategory[]> {
+  const categories = await adminPublicGet<AdminCategory[]>('/categories');
+
+  return categories
+    .map((category) => ({
+      id: String(category.id),
+      name: category.name || '',
+      slug: category.slug || String(category.id),
+      sortOrder: Number(category.sortOrder ?? category.sort_order ?? 0),
+      isActive:
+        category.isActive !== undefined
+          ? Boolean(category.isActive)
+          : category.is_active !== undefined
+            ? Boolean(category.is_active)
+            : true,
+    }))
+    .filter((category) => category.isActive)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
 export async function fetchAdminRegions(): Promise<DeliveryRegion[]> {

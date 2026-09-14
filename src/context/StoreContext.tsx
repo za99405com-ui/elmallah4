@@ -12,7 +12,8 @@ import {
   PaymentMethod,
   Coupon,
   DeliveryRegion,
-  CreateOrderPayload
+  CreateOrderPayload,
+  StoreCategory
 } from '../types';
 import { 
   INITIAL_SETTINGS, 
@@ -33,6 +34,7 @@ interface StoreContextType {
   // Products & Variants
   products: Product[];
   visibleProducts: Product[];
+  categories: StoreCategory[];
   selectedCategory: ProductCategory | 'all';
   setSelectedCategory: (cat: ProductCategory | 'all') => void;
   selectedProductForModal: Product | null;
@@ -160,6 +162,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // Products are server-authoritative.
   // Do not hydrate legacy product catalog from localStorage.
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<StoreCategory[]>([]);
 
   useEffect(() => {
     try {
@@ -431,8 +434,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setIsLoadingData(true);
     try {
       // 1. Query backend API as primary authoritative source
-      const [productsRes, regionsRes, settingsRes] = await Promise.allSettled([
+      const [productsRes, categoriesRes, regionsRes, settingsRes] = await Promise.allSettled([
         api.getProducts(),
+        api.getCategories(),
         api.getRegions(),
         api.getSettings()
       ]);
@@ -446,6 +450,18 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         );
         setBackendConnected(true);
       }
+
+      if (
+        categoriesRes.status === 'fulfilled' &&
+        categoriesRes.value?.success
+      ) {
+        setCategories(
+          Array.isArray(categoriesRes.value.data)
+            ? categoriesRes.value.data
+            : []
+        );
+      }
+
       if (regionsRes.status === 'fulfilled' && regionsRes.value?.success && regionsRes.value.data?.length > 0) {
         setRegions(regionsRes.value.data);
       }
@@ -747,6 +763,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         toggleTheme,
         products,
         visibleProducts,
+        categories,
         selectedCategory,
         setSelectedCategory,
         selectedProductForModal,
