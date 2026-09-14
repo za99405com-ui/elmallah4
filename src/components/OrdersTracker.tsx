@@ -44,21 +44,49 @@ export const OrdersTracker: React.FC = React.memo(() => {
     setTimeout(() => setIsRefreshing(false), 600);
   };
 
-  const getStatusBadge = (status: OrderStatus) => {
+  const getStatusBadge = (status: OrderStatus, order?: Order) => {
     switch (status) {
-      case 'new':
+      case 'new': {
+        const isCod = order?.paymentMode === 'cash_on_delivery' || order?.depositStatus === 'not_required';
+        const isConfirmed = order?.depositStatus === 'confirmed';
+        const isRejected = order?.depositStatus === 'rejected';
+
+        let description = 'تم تسجيل الطلب وجاري مراجعته وتجهيزه.';
+        if (!isCod && order) {
+          if (isConfirmed) {
+            description = 'تم تأكيد العربون وجاري متابعة تجهيز الطلب.';
+          } else if (isRejected) {
+            description = 'تعذر تأكيد العربون. يرجى التواصل معنا أو مراجعة طريقة الدفع.';
+          } else {
+            description = 'الطلب مسجل وفي انتظار تأكيد العربون.';
+          }
+        }
+
         return {
-          bg: 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800',
-          label: 'قيد مراجعة الحجز',
-          icon: '⏳',
-          description: 'الطلب قيد مراجعة وتأكيد الإدارة للتحقق من التحويل'
+          bg: isRejected
+            ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-200 dark:border-rose-800'
+            : isConfirmed || isCod
+            ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800'
+            : 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800',
+          label: isCod
+            ? 'طلب جديد'
+            : isConfirmed
+            ? 'عربون مؤكد'
+            : isRejected
+            ? 'عربون متعذر'
+            : 'بانتظار العربون',
+          icon: isCod || isConfirmed ? '🐟' : isRejected ? '❌' : '⏳',
+          description
         };
+      }
       case 'preparing':
         return {
           bg: 'bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800',
           label: 'جاري التجهيز',
           icon: '📦',
-          description: 'يتم الآن تحضير وتعبئة الأسماك الطازجة مبردة'
+          description: order?.depositStatus === 'rejected'
+            ? 'تعذر تأكيد العربون. يرجى التواصل معنا أو مراجعة طريقة الدفع.'
+            : 'يتم الآن تحضير وتعبئة الأسماك الطازجة مبردة'
         };
       case 'on_delivery':
         return {
@@ -86,7 +114,7 @@ export const OrdersTracker: React.FC = React.memo(() => {
           bg: 'bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700',
           label: 'قيد المراجعة',
           icon: '📦',
-          description: ''
+          description: 'تم تسجيل الطلب وجاري مراجعته وتجهيزه.'
         };
     }
   };
@@ -223,7 +251,7 @@ export const OrdersTracker: React.FC = React.memo(() => {
       ) : (
         <div className="space-y-2.5">
           {filteredOrders.map((order) => {
-            const badge = getStatusBadge(order.status);
+            const badge = getStatusBadge(order.status, order);
             const isExpanded = expandedOrderId === order.id;
 
             return (
@@ -441,12 +469,12 @@ export const OrdersTracker: React.FC = React.memo(() => {
                       </div>
 
                       <div>
-                        <span className="text-slate-400 block font-medium text-[10px]">بيانات العميل والتحويل:</span>
+                        <span className="text-slate-400 block font-medium text-[10px]">بيانات العميل والدفع:</span>
                         <p className="font-bold text-slate-800 dark:text-slate-200 text-xs mt-0.5">{order.customerName}</p>
                         <p className="text-slate-600 dark:text-slate-400 text-[11px]">هاتف: {order.customerPhone}</p>
                         {order.depositTransactionRef && (
                           <p className="text-cyan-700 dark:text-cyan-400 text-[11px] font-bold mt-0.5">
-                            رقم المحول منه: {order.depositTransactionRef}
+                            مرجع التحويل: {order.depositTransactionRef}
                           </p>
                         )}
                       </div>

@@ -86,11 +86,23 @@ export type PaymentMethod =
   | 'vodafone_cash';    // تحويل محفظة فودافون كاش
 
 export function getPaymentMethodLabel(method?: PaymentMethod, rawMethod?: string): string {
-  if (method === 'card' || rawMethod === 'card') return 'الكارت البنكي';
-  if (method === 'vodafone_cash' || rawMethod === 'vodafone_cash') return 'فودافون كاش';
-  if (method === 'instapay' || rawMethod === 'instapay') return 'إنستا باي';
-  if (method === 'cash_on_delivery' || rawMethod === 'cash_on_delivery' || rawMethod === 'cash') return 'الدفع عند الاستلام';
-  if (rawMethod) return rawMethod;
+  // If rawMethod is provided, it must take strict precedence and cannot be overridden by fallback method
+  if (rawMethod) {
+    if (rawMethod === 'card') return 'الكارت البنكي';
+    if (rawMethod === 'vodafone_cash') return 'فودافون كاش';
+    if (rawMethod === 'instapay') return 'إنستا باي';
+    if (rawMethod === 'cash_on_delivery' || rawMethod === 'cash') return 'الدفع عند الاستلام';
+    // Unknown historical/legacy raw method must never be mapped to card, instapay, or vodafone
+    return 'طريقة دفع سابقة';
+  }
+
+  // If only method is provided, match against known valid methods
+  if (method === 'card') return 'الكارت البنكي';
+  if (method === 'vodafone_cash') return 'فودافون كاش';
+  if (method === 'instapay') return 'إنستا باي';
+  if (method === 'cash_on_delivery') return 'الدفع عند الاستلام';
+  if (method) return 'طريقة دفع سابقة';
+
   return 'الدفع عند الاستلام';
 }
 

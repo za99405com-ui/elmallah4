@@ -775,6 +775,13 @@ export async function createServer() {
         };
       });
 
+      const rowPaymentMethodRaw = orderRow.payment_method ? String(orderRow.payment_method).trim() : undefined;
+      const isKnownRowMethod =
+        rowPaymentMethodRaw === 'cash_on_delivery' ||
+        rowPaymentMethodRaw === 'vodafone_cash' ||
+        rowPaymentMethodRaw === 'instapay' ||
+        rowPaymentMethodRaw === 'card';
+
       const order: Order = {
         id: String(orderRow.id),
         orderNumber: orderRow.order_number,
@@ -792,7 +799,9 @@ export async function createServer() {
         discountAmount: Number(orderRow.discount_amount || 0),
         couponCode: orderRow.coupon_code || undefined,
         total: Number(orderRow.total),
-        paymentMethod: orderRow.payment_method,
+        paymentMode: orderRow.payment_mode || (orderRow.deposit_status === 'not_required' ? 'cash_on_delivery' : 'deposit_online'),
+        paymentMethod: isKnownRowMethod ? (rowPaymentMethodRaw as PaymentMethod) : 'cash_on_delivery',
+        rawPaymentMethod: !isKnownRowMethod ? rowPaymentMethodRaw : undefined,
         depositRequired: Number(orderRow.deposit_required || 0),
         depositPaid: Number(orderRow.deposit_paid || 0),
         depositStatus: orderRow.deposit_status || 'none',
@@ -865,7 +874,7 @@ export async function createServer() {
       cancelled: 'cancelled',
     };
 
-    const rawPaymentMethod = adminOrder.depositMethod;
+    const rawPaymentMethod = adminOrder.depositMethod ? String(adminOrder.depositMethod).trim() : undefined;
     const isKnownMethod =
       rawPaymentMethod === 'cash_on_delivery' ||
       rawPaymentMethod === 'vodafone_cash' ||
@@ -888,12 +897,11 @@ export async function createServer() {
       }
     }
 
-    // Map known methods exactly; for unknown legacy methods, do not falsely claim instapay (Item 10)
+    // Map known methods exactly; for unknown legacy methods, do not falsely claim card, instapay, or vodafone_cash.
+    // Preserve original value in rawPaymentMethod and use neutral internal fallback for TypeScript safety.
     const paymentMethod: PaymentMethod = isKnownMethod
-      ? rawPaymentMethod
-      : paymentMode === 'cash_on_delivery'
-        ? 'cash_on_delivery'
-        : 'card';
+      ? (rawPaymentMethod as PaymentMethod)
+      : 'cash_on_delivery';
 
     // Deposit status mapping (Item 11)
     let depositStatus: Order['depositStatus'];
