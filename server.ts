@@ -830,6 +830,7 @@ export async function createServer() {
     depositStatus?: string;
     depositMethod?: string;
     depositReference?: string;
+    paymentMode?: 'deposit_online' | 'cash_on_delivery';
     remainingAmount: number;
     status: string;
     notes?: string;
@@ -865,29 +866,52 @@ export async function createServer() {
     };
 
     const rawPaymentMethod = adminOrder.depositMethod;
-    const paymentMethod: PaymentMethod =
+    const isKnownMethod =
       rawPaymentMethod === 'cash_on_delivery' ||
       rawPaymentMethod === 'vodafone_cash' ||
       rawPaymentMethod === 'instapay' ||
-      rawPaymentMethod === 'card'
-        ? rawPaymentMethod
-        : 'instapay';
+      rawPaymentMethod === 'card';
 
-    const paymentMode: PaymentMode =
-      paymentMethod === 'cash_on_delivery'
+    // Preserve Admin paymentMode if valid, otherwise derive accurately (Item 9)
+    let paymentMode: PaymentMode;
+    if (adminOrder.paymentMode === 'deposit_online' || adminOrder.paymentMode === 'cash_on_delivery') {
+      paymentMode = adminOrder.paymentMode;
+    } else {
+      if (
+        adminOrder.depositStatus === 'not_required' ||
+        rawPaymentMethod === 'cash_on_delivery' ||
+        rawPaymentMethod === 'cash'
+      ) {
+        paymentMode = 'cash_on_delivery';
+      } else {
+        paymentMode = 'deposit_online';
+      }
+    }
+
+    // Map known methods exactly; for unknown legacy methods, do not falsely claim instapay (Item 10)
+    const paymentMethod: PaymentMethod = isKnownMethod
+      ? rawPaymentMethod
+      : paymentMode === 'cash_on_delivery'
         ? 'cash_on_delivery'
-        : 'deposit_online';
+        : 'card';
 
-    const depositStatus: Order['depositStatus'] =
-      adminOrder.depositStatus === 'confirmed'
-        ? 'confirmed'
-        : adminOrder.depositStatus === 'rejected'
-          ? 'rejected'
-          : adminOrder.depositStatus === 'not_required' ||
-              paymentMode === 'cash_on_delivery' ||
-              Number(adminOrder.depositAmount || 0) <= 0
-            ? 'not_required'
-            : 'pending';
+    // Deposit status mapping (Item 11)
+    let depositStatus: Order['depositStatus'];
+    if (adminOrder.depositStatus === 'confirmed') {
+      depositStatus = 'confirmed';
+    } else if (adminOrder.depositStatus === 'rejected') {
+      depositStatus = 'rejected';
+    } else if (adminOrder.depositStatus === 'not_required') {
+      depositStatus = 'not_required';
+    } else if (adminOrder.depositStatus === 'none') {
+      depositStatus = 'none';
+    } else if (paymentMode === 'cash_on_delivery' || Number(adminOrder.depositAmount || 0) <= 0) {
+      depositStatus = 'not_required';
+    } else if (adminOrder.depositStatus === 'pending') {
+      depositStatus = 'pending';
+    } else {
+      depositStatus = 'pending';
+    }
 
     return {
       id: String(adminOrder.id),
@@ -921,6 +945,7 @@ export async function createServer() {
       total: Number(adminOrder.totalAmount || 0),
       paymentMode,
       paymentMethod,
+      rawPaymentMethod: isKnownMethod ? undefined : rawPaymentMethod,
       depositRequired: Number(adminOrder.depositAmount || 0),
       depositPaid:
         depositStatus === 'confirmed'
@@ -928,7 +953,7 @@ export async function createServer() {
           : 0,
       depositStatus,
       depositTransactionRef: adminOrder.depositReference,
-      remainingAmount: Number(adminOrder.remainingAmount || 0),
+      remainingAmount: Number(adminOrder.remainingAmount ?? (Number(adminOrder.totalAmount || 0) - (depositStatus === 'confirmed' ? Number(adminOrder.depositAmount || 0) : 0))),
       status: statusMap[adminOrder.status] || 'new',
       createdAt: adminOrder.createdAt,
       deliveryTargetDate: 'نفس اليوم مبرد 🚚',
@@ -1294,11 +1319,42 @@ export async function createServer() {
       });
     }
 
-    const resolvedPaymentMode: PaymentMode =
-      payload.paymentMode ||
-      (paymentMethod === 'cash_on_delivery'
-        ? 'cash_on_delivery'
-        : 'deposit_online');
+    const rawPaymentMode = payload.paymentMode;
+    let resolvedPaymentMode: PaymentMode;
+
+    if (rawPaymentMode !== undefined && rawPaymentMode !== null) {
+      if (rawPaymentMode !== 'deposit_online' && rawPaymentMode !== 'cash_on_delivery') {
+        return res.status(400).json({
+          success: false,
+          error: 'نظام السداد المحدد غير صالح',
+        });
+      }
+      resolvedPaymentMode = rawPaymentMode;
+    } else {
+      // Legacy fallback
+      resolvedPaymentMode =
+        paymentMethod === 'cash_on_delivery'
+          ? 'cash_on_delivery'
+          : 'deposit_online';
+    }
+
+    // Strict runtime combination validation (Item 8)
+    if (resolvedPaymentMode === 'deposit_online') {
+      const allowedOnlineMethods: PaymentMethod[] = ['card', 'vodafone_cash', 'instapay'];
+      if (!allowedOnlineMethods.includes(paymentMethod)) {
+        return res.status(400).json({
+          success: false,
+          error: 'طريقة الدفع المحددة غير متوافقة مع نظام سداد العربون أونلاين',
+        });
+      }
+    } else if (resolvedPaymentMode === 'cash_on_delivery') {
+      if (paymentMethod !== 'cash_on_delivery') {
+        return res.status(400).json({
+          success: false,
+          error: 'نظام الدفع عند الاستلام يتطلب اختيار الدفع عند الاستلام',
+        });
+      }
+    }
 
     const resolvedDepositMethod: PaymentMethod =
       resolvedPaymentMode === 'cash_on_delivery'

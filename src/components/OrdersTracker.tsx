@@ -19,7 +19,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
-import { Order, OrderStatus } from '../types';
+import { Order, OrderStatus, getPaymentMethodLabel } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
 
 export const OrdersTracker: React.FC = React.memo(() => {
@@ -399,12 +399,33 @@ export const OrdersTracker: React.FC = React.memo(() => {
                         <span>المبلغ الإجمالي الكلي:</span>
                         <span>{order.total} جنيه</span>
                       </div>
-                      <div className="flex justify-between text-cyan-700 dark:text-cyan-300 font-bold">
-                        <span>العربون ({order.depositStatus === 'confirmed' ? 'مؤكد ✓' : 'قيد المراجعة'}):</span>
-                        <span>{order.depositPaid} جنيه</span>
+                      <div className="flex justify-between font-bold text-slate-700 dark:text-slate-300">
+                        <span>طريقة الدفع:</span>
+                        <span>{order.paymentMode === 'cash_on_delivery' ? 'الدفع عند الاستلام' : getPaymentMethodLabel(order.paymentMethod, order.rawPaymentMethod)}</span>
                       </div>
-                      <div className="flex justify-between text-amber-600 dark:text-amber-400 font-black">
-                        <span>المتبقي للدليفري عند الاستلام:</span>
+                      {order.paymentMode === 'cash_on_delivery' || order.depositStatus === 'not_required' ? (
+                        <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                          <span>العربون:</span>
+                          <span>لا يوجد عربون</span>
+                        </div>
+                      ) : order.depositStatus === 'confirmed' ? (
+                        <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-bold">
+                          <span>العربون (مؤكد ✓):</span>
+                          <span>{order.depositPaid} جنيه</span>
+                        </div>
+                      ) : order.depositStatus === 'rejected' ? (
+                        <div className="flex justify-between text-rose-600 dark:text-rose-400 font-bold">
+                          <span>العربون:</span>
+                          <span>تعذر التأكيد</span>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between text-amber-700 dark:text-amber-400 font-bold">
+                          <span>العربون المطلوب:</span>
+                          <span>{order.depositRequired} جنيه</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-slate-900 dark:text-white font-black">
+                        <span>المتبقي عند الاستلام:</span>
                         <span>{order.remainingAmount} جنيه</span>
                       </div>
                     </div>

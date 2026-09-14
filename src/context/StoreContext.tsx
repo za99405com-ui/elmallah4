@@ -78,7 +78,7 @@ interface StoreContextType {
     notes?: string;
     paymentMode?: PaymentMode;
     paymentMethod: PaymentMethod;
-    depositPaid: number;
+    depositPaid?: number;
     depositTransactionRef?: string;
   }) => Promise<Order> | Order;
   reOrder: (order: Order) => void;
@@ -623,7 +623,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     notes?: string;
     paymentMode?: PaymentMode;
     paymentMethod: PaymentMethod;
-    depositPaid: number;
+    depositPaid?: number;
     depositTransactionRef?: string;
   }): Promise<Order> => {
     const resolvedMode: PaymentMode =
@@ -650,7 +650,6 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       paymentMode: resolvedMode,
       paymentMethod: orderData.paymentMethod,
-      depositPaid: resolvedMode === 'cash_on_delivery' ? 0 : orderData.depositPaid,
       depositTransactionRef:
         resolvedMode === 'cash_on_delivery' ? undefined : orderData.depositTransactionRef,
       couponCode: appliedCoupon?.code,

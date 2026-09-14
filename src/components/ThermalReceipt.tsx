@@ -1,6 +1,6 @@
 import React from 'react';
 import { Printer, X, Check, Phone, MapPin, Calendar, Clock, ShoppingBag } from 'lucide-react';
-import { Order } from '../types';
+import { Order, getPaymentMethodLabel } from '../types';
 
 interface ThermalReceiptProps {
   order: Order | null;
@@ -149,7 +149,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({
             </div>
 
             <div className="text-center text-[10px] pt-2 border-t border-dashed border-slate-300 space-y-0.5">
-              <p className="font-bold">طريقة الدفع: {order.paymentMethod === 'cash_on_delivery' ? 'كاش عند الاستلام' : order.paymentMethod === 'card' ? 'بطاقة بنكية' : order.paymentMethod === 'instapay' ? 'إنستاباي' : 'فودافون كاش'}</p>
+              <p className="font-bold">طريقة الدفع: {getPaymentMethodLabel(order.paymentMethod, order.rawPaymentMethod)}</p>
               <p>شكراً لثقتكم في متجر الملاح 🐟</p>
               <p className="text-[9px] text-slate-500 print:text-black">صيد اليوم طازج - يرجى فحص الطلب بحضور المندوب</p>
             </div>

@@ -85,6 +85,15 @@ export type PaymentMethod =
   | 'instapay'          // تحويل إنستاباي فوري
   | 'vodafone_cash';    // تحويل محفظة فودافون كاش
 
+export function getPaymentMethodLabel(method?: PaymentMethod, rawMethod?: string): string {
+  if (method === 'card' || rawMethod === 'card') return 'الكارت البنكي';
+  if (method === 'vodafone_cash' || rawMethod === 'vodafone_cash') return 'فودافون كاش';
+  if (method === 'instapay' || rawMethod === 'instapay') return 'إنستا باي';
+  if (method === 'cash_on_delivery' || rawMethod === 'cash_on_delivery' || rawMethod === 'cash') return 'الدفع عند الاستلام';
+  if (rawMethod) return rawMethod;
+  return 'الدفع عند الاستلام';
+}
+
 export type DepositStatus = 
   | 'none'              // لا يوجد عربون
   | 'not_required'      // غير مطلوب (الدفع عند الاستلام كاش)
@@ -128,6 +137,7 @@ export interface Order {
   // Deposit & Payment Information
   paymentMode?: PaymentMode;
   paymentMethod: PaymentMethod;
+  rawPaymentMethod?: string;      // القيمة الأصلية لطريقة الدفع من السجل التاريخي إن وجدت
   depositRequired: number;        // قيمة العربون المطلوب
   depositPaid: number;            // قيمة العربون المدفوع/المحول
   depositStatus: DepositStatus;   // حالة مراجعة العربون

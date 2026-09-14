@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useStore } from '../context/StoreContext';
-import { Order, PaymentMode, PaymentMethod, CartItem, DeliveryRegion } from '../types';
+import { Order, PaymentMode, PaymentMethod, CartItem, DeliveryRegion, getPaymentMethodLabel } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
 
 /* -------------------------------------------------------------------------- */
@@ -330,12 +330,12 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
               <span className="font-bold text-sm text-slate-900 dark:text-white">سداد عربون أونلاين</span>
             </div>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-900/60 text-cyan-800 dark:text-cyan-200">
-              تأكيد فوري
+              عربون أونلاين
             </span>
           </div>
 
           <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-2">
-            دفع عربون جدية ({cartDepositRequired} جنيه) لحجز صيد الفجر وتأكيده فورياً، وسداد المتبقي ({remainingUponDelivery} جنيه) عند الاستلام.
+            سداد عربون متوقع ({depositAmountToPay} جنيه) لحجز صيد الفجر، وسداد المتبقي ({remainingUponDelivery} جنيه) عند الاستلام.
           </p>
 
           <div className="flex items-center gap-1.5 text-[11px] font-medium text-cyan-700 dark:text-cyan-300">
@@ -367,7 +367,7 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
               </div>
               <span className="font-bold text-sm text-slate-900 dark:text-white">الدفع نقداً عند الاستلام</span>
             </div>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
               بدون عربون
             </span>
           </div>
@@ -376,7 +376,7 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
             سداد كامل قيمة الطلب ({grandTotal} جنيه) نقداً لمندوب التوصيل بعد استلام الأسماك الطازجة وفحصها بالكامل.
           </p>
 
-          <div className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300">
             <Banknote className="w-3.5 h-3.5" />
             <span>كاش بالكامل عند الاستلام</span>
           </div>
@@ -391,12 +391,15 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
             <div className="flex items-center justify-between font-bold text-cyan-900 dark:text-cyan-200">
               <div className="flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-cyan-600" />
-                <span>حجز صيد الفجر الطازج بعربون الجدية:</span>
+                <span>حجز صيد الفجر الطازج بالعربون المتوقع:</span>
               </div>
               <span className="font-mono text-cyan-800 dark:text-cyan-300 font-black">{depositAmountToPay} جنيه</span>
             </div>
             <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-              لحجز الأسماك طازجة باسمك من صيد الفجر، يُرجى سداد عربون بقيمة <strong>{depositAmountToPay} جنيه</strong>، وسداد باقي المبلغ (<strong>{remainingUponDelivery} جنيه</strong>) لمندوب التوصيل.
+              لحجز الأسماك طازجة باسمك من صيد الفجر، يُرجى سداد عربون متوقع بقيمة <strong>{depositAmountToPay} جنيه</strong>، وسداد باقي المبلغ (<strong>{remainingUponDelivery} جنيه</strong>) لمندوب التوصيل.
+            </p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-0.5">
+              القيمة النهائية للعربون يتم اعتمادها بواسطة النظام عند إنشاء الطلب.
             </p>
           </div>
 
@@ -448,18 +451,18 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
             </button>
           </div>
 
-          {/* Conditional Method Content */}
+          {/* Conditional Method Content: Card */}
           {onlineDepositMethod === 'card' && (
             <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
               <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-slate-200">
-                <ShieldCheck className="w-4 h-4 text-cyan-600" />
-                <span>دفع إلكتروني آمن بالبطاقة البنكية</span>
+                <CreditCard className="w-4 h-4 text-cyan-600" />
+                <span>دفع العربون بالبطاقة البنكية</span>
               </div>
-              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                يتم الدفع عبر بوابة دفع مشفرة بالكامل. لا نقوم بتسجيل أو تخزين أي بيانات للبطاقات البنكية. سيتم تسجيل وتأكيد الحجز فورياً في النظام.
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
+                سيتم إتمام الدفع الآمن عبر بوابة الدفع عند تفعيل الربط الإلكتروني. لن يطلب منك متجر الملاح إدخال بيانات البطاقة داخل هذه الصفحة.
               </p>
               <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
-                <span>العربون المطلوب تحصيله بالبطاقة:</span>
+                <span>العربون المتوقع بالبطاقة:</span>
                 <span className="font-bold text-cyan-700 dark:text-cyan-300 font-mono text-sm">{depositAmountToPay} جنيه</span>
               </div>
             </div>
@@ -506,7 +509,8 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
                 <label className="block font-bold text-slate-800 dark:text-slate-200 text-xs mb-1">
                   {onlineDepositMethod === 'instapay'
                     ? 'رقم الهاتف أو حساب إنستاباي المحول منه:'
-                    : 'رقم محفظة فودافون كاش المحول منها:'} <span className="text-rose-500">*</span>
+                    : 'رقم محفظة فودافون كاش المحول منها:'}{' '}
+                  <span className="text-slate-400 font-normal">(مرجع التحويل — اختياري)</span>
                 </label>
                 <input
                   type="text"
@@ -514,18 +518,13 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
                   onChange={(e) => onTransactionRefChange(e.target.value)}
                   placeholder={
                     onlineDepositMethod === 'instapay'
-                      ? 'مثال: 01012345678 أو حساب إنستاباي المرسل منه...'
-                      : 'مثال: 01012345678...'
+                      ? 'مثال: 01012345678 أو حساب إنستاباي المرسل منه (اختياري)...'
+                      : 'مثال: 01012345678 (اختياري)...'
                   }
-                  className={`w-full px-3 py-2 bg-white dark:bg-slate-900 border rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-hidden ${
-                    formErrorRef ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
-                  }`}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-hidden"
                 />
-                {formErrorRef && (
-                  <p className="text-rose-600 text-[11px] font-medium mt-0.5">{formErrorRef}</p>
-                )}
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                  * يُرجى كتابة الرقم لمطابقة التحويل ومراجعته من قِبل إدارة المتجر لتأكيد الحجز.
+                  يمكنك إدخال رقم الهاتف أو مرجع التحويل للمساعدة في المراجعة، لكنه لا يُستخدم كإثبات تلقائي لنجاح الدفع.
                 </p>
               </div>
             </div>
@@ -533,15 +532,15 @@ const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
         </div>
       )}
 
-      {/* MODE 2: CASH ON DELIVERY - HIDES DEPOSIT INPUTS */}
+      {/* MODE 2: CASH ON DELIVERY */}
       {paymentMode === 'cash_on_delivery' && (
-        <div className="bg-emerald-50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 text-xs space-y-1.5">
-          <div className="flex items-center gap-1.5 font-bold text-emerald-900 dark:text-emerald-200">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+        <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs space-y-1.5">
+          <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
+            <Truck className="w-4 h-4 text-slate-600 dark:text-slate-400 shrink-0" />
             <span>الدفع نقداً عند الاستلام متاح بدون أي عربون مسبق</span>
           </div>
-          <p className="text-emerald-800/90 dark:text-emerald-300 leading-relaxed">
-            سيتم تجهيز طلبك طازجاً من صيد الفجر والتواصل معك هاتفياً قبل خروج مندوب التوصيل المبرد. سداد المبلغ بالكامل (<strong>{grandTotal} جنيه</strong>) نقداً لمندوب التوصيل عند استلام الأسماك.
+          <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+            سيتم تجهيز طلبك طازجاً من صيد الفجر والتواصل معك هاتفياً قبل خروج مندوب التوصيل المبرد. سداد كامل المبلغ (<strong>{grandTotal} جنيه</strong>) نقداً لمندوب التوصيل عند استلام الأسماك.
           </p>
         </div>
       )}
@@ -623,8 +622,36 @@ export const CheckoutFlow: React.FC = React.memo(() => {
   // Overall totals
   const totalBeforeDiscount = cartSubtotal + currentDeliveryFee;
   const grandTotal = useMemo(() => Math.max(0, totalBeforeDiscount - couponDiscount), [totalBeforeDiscount, couponDiscount]);
-  const depositAmountToPay = useMemo(() => paymentMode === 'cash_on_delivery' ? 0 : cartDepositRequired, [paymentMode, cartDepositRequired]);
-  const remainingUponDelivery = useMemo(() => paymentMode === 'cash_on_delivery' ? grandTotal : Math.max(0, grandTotal - depositAmountToPay), [paymentMode, grandTotal, depositAmountToPay]);
+
+  // Online deposit preview calculated from discounted final total (Item 6)
+  const onlineDepositPreview = useMemo(() => {
+    if (cart.length === 0 || grandTotal <= 0) return 0;
+    if (storeSettings.defaultDepositType === 'percentage') {
+      const pct = storeSettings.defaultDepositValue || 20;
+      return Math.min(grandTotal, Math.round((grandTotal * pct) / 100));
+    } else if (storeSettings.defaultDepositType === 'fixed') {
+      const fixedVal = storeSettings.defaultDepositValue || 50;
+      return Math.min(grandTotal, Math.round(fixedVal));
+    } else if (storeSettings.defaultDepositType === 'none') {
+      return 0;
+    }
+    // Proportional fallback from cart
+    if (cartSubtotal > 0 && cartDepositRequired > 0) {
+      const ratio = cartDepositRequired / cartSubtotal;
+      return Math.min(grandTotal, Math.round(grandTotal * ratio));
+    }
+    return Math.min(grandTotal, Math.round((grandTotal * 20) / 100));
+  }, [cart.length, grandTotal, storeSettings, cartDepositRequired, cartSubtotal]);
+
+  const depositAmountToPay = useMemo(() => {
+    return paymentMode === 'cash_on_delivery' ? 0 : onlineDepositPreview;
+  }, [paymentMode, onlineDepositPreview]);
+
+  const remainingUponDelivery = useMemo(() => {
+    return paymentMode === 'cash_on_delivery'
+      ? grandTotal
+      : Math.max(0, grandTotal - depositAmountToPay);
+  }, [paymentMode, grandTotal, depositAmountToPay]);
 
   const handleCopy = useCallback((text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -632,13 +659,13 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     setTimeout(() => setCopiedKey(null), 2000);
   }, []);
 
-  const handleApplyCoupon = useCallback((e: React.FormEvent) => {
+  const handleApplyCoupon = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!couponCodeInput.trim()) return;
-    const ok = applyCoupon(couponCodeInput);
+    const ok = await applyCoupon(couponCodeInput.trim());
     if (ok) {
-      setCouponSuccessMsg('تم تطبيق كود الخصم بنجاح! 🎉');
-      setTimeout(() => setCouponSuccessMsg(''), 3000);
+      setCouponSuccessMsg('تم تطبيق كود الخصم بنجاح');
+      setTimeout(() => setCouponSuccessMsg(''), 4000);
     }
   }, [couponCodeInput, applyCoupon]);
 
@@ -664,14 +691,10 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     if (currentRegion?.minOrderAmount && cartSubtotal < currentRegion.minOrderAmount) {
       errors.regionMin = `الحد الأدنى للطلب في منطقة ${currentRegion.governorate} هو ${currentRegion.minOrderAmount} جنيه`;
     }
-    if (paymentMode === 'deposit_online') {
-      if ((onlineDepositMethod === 'instapay' || onlineDepositMethod === 'vodafone_cash') && !transactionRef.trim()) {
-        errors.transactionRef = 'برجاء كتابة رقم الهاتف أو المحفظة المحول منها لمطابقة التحويل وتأكيد الحجز';
-      }
-    }
+    // Transaction reference is completely optional (Item 2)
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
-  }, [customerName, customerPhone, address, currentRegion, cartSubtotal, paymentMode, onlineDepositMethod, transactionRef]);
+  }, [customerName, customerPhone, address, currentRegion, cartSubtotal]);
 
   const handleProceedToDelivery = useCallback(() => {
     if (cart.length === 0) return;
@@ -700,13 +723,10 @@ export const CheckoutFlow: React.FC = React.memo(() => {
         notes,
         paymentMode,
         paymentMethod: effectivePaymentMethod,
-        depositPaid: depositAmountToPay,
         depositTransactionRef:
-          paymentMode === 'cash_on_delivery'
+          paymentMode === 'cash_on_delivery' || onlineDepositMethod === 'card'
             ? undefined
-            : onlineDepositMethod === 'card'
-              ? 'دفع إلكتروني بالبطاقة'
-              : transactionRef.trim()
+            : transactionRef.trim() || undefined
       });
 
       setPlacedOrder(order);
@@ -741,7 +761,6 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     notes, 
     paymentMode, 
     onlineDepositMethod, 
-    depositAmountToPay, 
     transactionRef
   ]);
 
@@ -858,9 +877,12 @@ export const CheckoutFlow: React.FC = React.memo(() => {
               )}
 
               <div className="flex justify-between text-slate-300">
-                <span>العربون المطلوب لجدية صيد الفجر:</span>
-                <span className="font-bold text-amber-300 text-sm">{cartDepositRequired} جنيه</span>
+                <span>العربون المتوقع في حالة الدفع الإلكتروني:</span>
+                <span className="font-bold text-cyan-300 text-sm">{onlineDepositPreview} جنيه</span>
               </div>
+              <p className="text-[11px] text-slate-400 pt-0.5">
+                في الخطوة التالية يمكنك اختيار دفع العربون إلكترونياً أو الدفع بالكامل عند الاستلام.
+              </p>
             </div>
 
             <div className="flex justify-between items-baseline pt-1">
@@ -1071,7 +1093,7 @@ export const CheckoutFlow: React.FC = React.memo(() => {
               {paymentMode === 'deposit_online' ? (
                 <>
                   <div className="flex justify-between text-cyan-700 dark:text-cyan-400 font-bold">
-                    <span>العربون المطلوب سداده الآن:</span>
+                    <span>العربون المتوقع:</span>
                     <span>{depositAmountToPay} جنيه</span>
                   </div>
                   <div className="flex justify-between text-slate-800 dark:text-slate-200 font-bold">
@@ -1083,9 +1105,9 @@ export const CheckoutFlow: React.FC = React.memo(() => {
                 <>
                   <div className="flex justify-between text-slate-600 dark:text-slate-400 font-medium">
                     <span>العربون المسبق:</span>
-                    <span className="text-emerald-600 font-bold">غير مطلوب (0 جنيه)</span>
+                    <span className="text-slate-700 dark:text-slate-300 font-bold">غير مطلوب (0 جنيه)</span>
                   </div>
-                  <div className="flex justify-between text-emerald-700 dark:text-emerald-400 font-bold">
+                  <div className="flex justify-between text-slate-900 dark:text-white font-bold">
                     <span>المطلوب سداده نقداً عند الاستلام:</span>
                     <span>{grandTotal} جنيه</span>
                   </div>
@@ -1112,16 +1134,16 @@ export const CheckoutFlow: React.FC = React.memo(() => {
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>جارٍ تسجيل وتأكيد الطلب...</span>
+                  <span>جارٍ تسجيل الطلب...</span>
                 </>
               ) : paymentMode === 'cash_on_delivery' ? (
                 <>
-                  <span>تأكيد الطلب والدفع عند الاستلام 🐟</span>
+                  <span>تأكيد الطلب — الدفع عند الاستلام 🐟</span>
                   <ArrowLeft className="w-4 h-4" />
                 </>
               ) : (
                 <>
-                  <span>إرسال الطلب ومراجعة العربون 🐟</span>
+                  <span>إنشاء الطلب ومتابعة دفع العربون 🐟</span>
                   <ArrowLeft className="w-4 h-4" />
                 </>
               )}
@@ -1131,146 +1153,206 @@ export const CheckoutFlow: React.FC = React.memo(() => {
       )}
 
       {/* STEP 3: SUCCESS & CONFIRMATION */}
-      {step === 3 && placedOrder && (
-        <div className="space-y-4 text-center">
-          
-          {/* Success Banner */}
-          <div className="bg-slate-900 dark:bg-black text-white rounded-3xl p-6 sm:p-8 shadow-xs space-y-3 border border-slate-800">
-            <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto text-2xl ${
-              placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                : 'bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse'
-            }`}>
-              {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required' ? '🐟' : '⏳'}
-            </div>
+      {step === 3 && placedOrder && (() => {
+        const isCod = placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required';
+        const isConfirmed = placedOrder.depositStatus === 'confirmed';
+        const isRejected = placedOrder.depositStatus === 'rejected';
+        const isPending = !isCod && !isConfirmed && !isRejected;
 
-            <div className="space-y-1">
-              <h2 className="text-xl sm:text-2xl font-black">
-                {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
-                  ? 'تم تأكيد تسجيل طلبك بنجاح! 🐟'
-                  : 'تم استلام طلبك وبانتظار مراجعة التحويل وتأكيد الحجز ⏳'}
-              </h2>
-              <p className="text-slate-300 text-sm font-medium">
-                رقم الطلب: <span className="text-amber-300 font-mono font-bold text-lg">{placedOrder.orderNumber}</span>
-              </p>
-              <p className="text-xs text-slate-300 max-w-md mx-auto pt-1 leading-relaxed">
-                {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
-                  ? 'طلبك قيد التجهيز من صيد الفجر الطازج وسيصلك مبرد. سداد المبلغ بالكامل نقداً لمندوب التوصيل عند الاستلام.'
-                  : `طلبك الآن قيد المراجعة لدى إدارة متجر الملاح. سيتم تأكيد الحجز والبدء في التجهيز فور مطابقة تحويل العربون${placedOrder.depositTransactionRef ? ` من الرقم (${placedOrder.depositTransactionRef})` : ''}.`}
-              </p>
-            </div>
+        const methodLabel = isCod
+          ? 'الدفع عند الاستلام'
+          : getPaymentMethodLabel(placedOrder.paymentMethod, placedOrder.rawPaymentMethod);
 
-            <div className="inline-block bg-slate-800 px-3 py-1 rounded-xl text-xs text-slate-200">
-              موعد التسليم المتوقع: <strong className="text-cyan-300">{placedOrder.deliveryTargetDate || 'اليوم'}</strong> ({placedOrder.estimatedDeliveryTime || 'مبرد'})
-            </div>
-          </div>
+        let bannerTitle = 'تم تأكيد طلبك';
+        let bannerMessage = 'تم تسجيل طلبك بنجاح، وسيتم دفع قيمة الطلب عند الاستلام.';
+        let bannerIcon = '🐟';
+        let bannerBadgeClass = 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40';
 
-          {/* Order Details Summary Card */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3 text-right">
-            <h3 className="font-bold text-sm text-slate-900 dark:text-white">تفاصيل الحجز والمدفوعات:</h3>
+        if (isPending) {
+          bannerTitle = 'تم إنشاء طلبك';
+          bannerMessage = 'طلبك مسجل وفي انتظار تأكيد دفع العربون.';
+          bannerIcon = '⏳';
+          bannerBadgeClass = 'bg-amber-500/20 text-amber-400 border border-amber-500/40';
+        } else if (isConfirmed) {
+          bannerTitle = 'تم دفع العربون بنجاح';
+          bannerMessage = 'تم تأكيد طلبك، وسيتم دفع المبلغ المتبقي عند الاستلام.';
+          bannerIcon = '✅';
+          bannerBadgeClass = 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40';
+        } else if (isRejected) {
+          bannerTitle = 'تعذر تأكيد العربون';
+          bannerMessage = 'يمكنك التواصل معنا أو إعادة محاولة الدفع.';
+          bannerIcon = '❌';
+          bannerBadgeClass = 'bg-rose-500/20 text-rose-400 border border-rose-500/40';
+        }
 
-            <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300 border-y border-slate-100 dark:border-slate-800 py-2.5">
-              {placedOrder.items.map((item, idx) => (
-                <div key={idx} className="flex justify-between">
-                  <span>{item.productName} ({item.quantity} {item.unit})</span>
-                  <span className="font-bold text-slate-900 dark:text-white">{item.itemTotal} جنيه</span>
-                </div>
-              ))}
-              {placedOrder.discountAmount > 0 && (
-                <div className="flex justify-between text-emerald-600 font-bold">
-                  <span>خصم الكوبون ({placedOrder.couponCode}):</span>
-                  <span>-{placedOrder.discountAmount} جنيه</span>
-                </div>
-              )}
-              <div className="flex justify-between text-emerald-600 font-medium pt-1">
-                <span>مصاريف التوصيل:</span>
-                <span>مجاناً 🚚</span>
-              </div>
-              <div className="flex justify-between font-black text-sm text-slate-900 dark:text-white pt-1">
-                <span>المبلغ الإجمالي:</span>
-                <span>{placedOrder.total} جنيه</span>
+        return (
+          <div className="space-y-4 text-center">
+            {/* Success Banner */}
+            <div className="bg-slate-900 dark:bg-black text-white rounded-3xl p-6 sm:p-8 shadow-xs space-y-3 border border-slate-800">
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto text-2xl ${bannerBadgeClass}`}>
+                {bannerIcon}
               </div>
 
-              {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required' ? (
-                <>
+              <div className="space-y-1">
+                <h2 className="text-xl sm:text-2xl font-black">
+                  {bannerTitle}
+                </h2>
+                <p className="text-slate-300 text-sm font-medium">
+                  رقم الطلب: <span className="text-amber-300 font-mono font-bold text-lg">{placedOrder.orderNumber}</span>
+                </p>
+                <p className="text-xs text-slate-300 max-w-md mx-auto pt-1 leading-relaxed">
+                  {bannerMessage}
+                </p>
+              </div>
+
+              <div className="inline-block bg-slate-800 px-3 py-1 rounded-xl text-xs text-slate-200">
+                موعد التسليم المتوقع: <strong className="text-cyan-300">{placedOrder.deliveryTargetDate || 'اليوم'}</strong> ({placedOrder.estimatedDeliveryTime || 'مبرد'})
+              </div>
+            </div>
+
+            {/* Order Details Summary Card */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3 text-right">
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">تفاصيل الطلب والمدفوعات:</h3>
+
+              <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300 border-y border-slate-100 dark:border-slate-800 py-2.5">
+                {placedOrder.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between">
+                    <span>{item.productName} ({item.quantity} {item.unit})</span>
+                    <span className="font-bold text-slate-900 dark:text-white">{item.itemTotal} جنيه</span>
+                  </div>
+                ))}
+                {placedOrder.discountAmount > 0 && (
                   <div className="flex justify-between text-emerald-600 font-bold">
-                    <span>طريقة الدفع:</span>
-                    <span>الدفع نقداً بالكامل عند الاستلام (كاش)</span>
+                    <span>خصم الكوبون ({placedOrder.couponCode}):</span>
+                    <span>-{placedOrder.discountAmount} جنيه</span>
                   </div>
-                  <div className="flex justify-between text-slate-900 dark:text-white font-bold">
-                    <span>المطلوب سداده لمندوب التوصيل:</span>
-                    <span className="text-slate-900 dark:text-white font-black">{placedOrder.remainingAmount || placedOrder.total} جنيه</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex justify-between text-amber-700 dark:text-amber-300 font-bold">
-                    <span>العربون (قيد المراجعة والتأكيد):</span>
-                    <span>{placedOrder.depositPaid || placedOrder.depositRequired} جنيه</span>
-                  </div>
-                  <div className="flex justify-between text-slate-900 dark:text-white font-bold">
-                    <span>المتبقي عند الاستلام:</span>
-                    <span className="text-slate-900 dark:text-white font-black">{placedOrder.remainingAmount} جنيه</span>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="text-xs text-slate-600 dark:text-slate-400 space-y-0.5">
-              <p><strong>العنوان:</strong> {placedOrder.governorate} - {placedOrder.city} - {placedOrder.address}</p>
-              <p><strong>الهاتف:</strong> {placedOrder.customerPhone} ({placedOrder.customerName})</p>
-              {placedOrder.depositTransactionRef && (
-                <p><strong>المرجع / المحول منه:</strong> <span className="font-bold font-mono text-cyan-800 dark:text-cyan-300" dir="ltr">{placedOrder.depositTransactionRef}</span></p>
-              )}
-            </div>
-
-            {/* Direct Action Buttons */}
-            <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCurrentTrackedOrder(placedOrder);
-                  setActiveTab('orders');
-                }}
-                className="flex-1 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-950 font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <span>متابعة حالة الطلب في طلباتي</span>
-              </button>
-
-              <a
-                href={getWhatsAppLink(
-                  storeSettings.whatsappNumber,
-                  placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
-                    ? `مرحباً متجر الملاح، أود تأكيد طلبي رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه (الدفع كاش عند الاستلام).`
-                    : `مرحباً متجر الملاح، أنا صاحب الطلب رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه وقمت بتحويل العربون (${placedOrder.depositPaid || placedOrder.depositRequired} جنيه)${placedOrder.depositTransactionRef ? ` من الرقم ${placedOrder.depositTransactionRef}` : ''}.`
                 )}
-                target="_blank"
-                rel="noreferrer"
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>
-                  {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
-                    ? 'تأكيد الطلب عبر واتساب'
-                    : 'إرسال إيصال التحويل عبر واتساب'}
-                </span>
-              </a>
-            </div>
+                <div className="flex justify-between text-emerald-600 font-medium pt-1">
+                  <span>مصاريف التوصيل:</span>
+                  <span>مجاناً 🚚</span>
+                </div>
+                <div className="flex justify-between font-black text-sm text-slate-900 dark:text-white pt-1">
+                  <span>المبلغ الإجمالي:</span>
+                  <span>{placedOrder.total} جنيه</span>
+                </div>
 
-            <div className="text-center pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab('products');
-                }}
-                className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-bold text-xs underline cursor-pointer"
-              >
-                + طلب أسماك أخرى
-              </button>
+                {/* Specific payment breakdown per state */}
+                <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-1">
+                  <div className="flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                    <span>طريقة الدفع:</span>
+                    <span>{methodLabel}</span>
+                  </div>
+
+                  {isCod && (
+                    <>
+                      <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                        <span>العربون:</span>
+                        <span>لا يوجد عربون</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 dark:text-white font-bold">
+                        <span>المطلوب عند الاستلام:</span>
+                        <span className="font-black text-sm">{placedOrder.remainingAmount || placedOrder.total} جنيه</span>
+                      </div>
+                    </>
+                  )}
+
+                  {isPending && (
+                    <>
+                      <div className="flex justify-between text-amber-700 dark:text-amber-400 font-bold">
+                        <span>العربون المطلوب:</span>
+                        <span>{placedOrder.depositRequired} جنيه</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 dark:text-white font-bold">
+                        <span>المتبقي عند الاستلام:</span>
+                        <span className="font-black text-sm">{placedOrder.remainingAmount} جنيه</span>
+                      </div>
+                    </>
+                  )}
+
+                  {isConfirmed && (
+                    <>
+                      <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-bold">
+                        <span>العربون:</span>
+                        <span>{placedOrder.depositPaid} جنيه (تم السداد)</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 dark:text-white font-bold">
+                        <span>المطلوب عند الاستلام:</span>
+                        <span className="font-black text-sm">{placedOrder.remainingAmount} جنيه</span>
+                      </div>
+                    </>
+                  )}
+
+                  {isRejected && (
+                    <>
+                      <div className="flex justify-between text-rose-600 dark:text-rose-400 font-bold">
+                        <span>حالة العربون:</span>
+                        <span>تعذر التأكيد</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 dark:text-white font-bold">
+                        <span>المتبقي عند الاستلام:</span>
+                        <span className="font-black text-sm">{placedOrder.remainingAmount} جنيه</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-600 dark:text-slate-400 space-y-0.5">
+                <p><strong>العنوان:</strong> {placedOrder.governorate} - {placedOrder.city} - {placedOrder.address}</p>
+                <p><strong>الهاتف:</strong> {placedOrder.customerPhone} ({placedOrder.customerName})</p>
+                {placedOrder.depositTransactionRef && (
+                  <p><strong>مرجع التحويل:</strong> <span className="font-bold font-mono text-cyan-800 dark:text-cyan-300" dir="ltr">{placedOrder.depositTransactionRef}</span></p>
+                )}
+              </div>
+
+              {/* Direct Action Buttons */}
+              <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCurrentTrackedOrder(placedOrder);
+                    setActiveTab('orders');
+                  }}
+                  className="flex-1 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-950 font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span>متابعة حالة الطلب في طلباتي</span>
+                </button>
+
+                <a
+                  href={getWhatsAppLink(
+                    storeSettings.whatsappNumber,
+                    isCod
+                      ? `مرحباً متجر الملاح، أود تأكيد طلبي رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه (الدفع كاش عند الاستلام).`
+                      : `مرحباً متجر الملاح، بخصوص طلبي رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه (العربون المطلوب: ${placedOrder.depositRequired} جنيه)${placedOrder.depositTransactionRef ? ` مرجع التحويل: ${placedOrder.depositTransactionRef}` : ''}.`
+                  )}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>
+                    {isCod
+                      ? 'تأكيد الطلب عبر واتساب'
+                      : 'متابعة العربون عبر واتساب'}
+                  </span>
+                </a>
+              </div>
+
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('products');
+                  }}
+                  className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-bold text-xs underline cursor-pointer"
+                >
+                  + طلب أسماك أخرى
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
     </div>
   );
