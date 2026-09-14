@@ -15,9 +15,7 @@ import { Footer } from '../components/Footer';
 import { STORE_CATEGORIES } from '../data/initialData';
 import { 
   MessageCircle, 
-  ShoppingCart, 
-  Search,
-  X
+  ShoppingCart
 } from 'lucide-react';
 import { Product, ProductCategory } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
@@ -37,100 +35,57 @@ const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
   onSelectCategory
 }) => {
   const { isLoadingData, loadDirectFromSupabase } = useStore();
-  const [searchQuery, setSearchQuery] = useState<string>('');
-
   const filteredProducts = useMemo(() => {
-    return visibleProducts.filter((product) => {
-      if (selectedCategory !== 'all' && product.category !== selectedCategory) {
-        return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        return (
-          product.name.toLowerCase().includes(q) ||
-          product.description.toLowerCase().includes(q)
-        );
-      }
-      return true;
-    });
-  }, [visibleProducts, selectedCategory, searchQuery]);
+    if (selectedCategory === 'all') {
+      return visibleProducts;
+    }
 
-  const handleClearSearch = useCallback(() => {
-    setSearchQuery('');
-  }, []);
+    return visibleProducts.filter(
+      (product) => product.category === selectedCategory
+    );
+  }, [visibleProducts, selectedCategory]);
 
   const handleResetFilters = useCallback(() => {
     onSelectCategory('all');
-    setSearchQuery('');
   }, [onSelectCategory]);
 
   return (
     <div className="space-y-4">
-      {/* Header & Filter Controls */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3 transition-colors">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <span>قائمة الأسماك الطازجة</span>
-              <span className="text-base">🐟</span>
-            </h1>
-            <p className="text-slate-500 dark:text-slate-400 text-xs font-medium mt-0.5">
-              صيد اليوم طازج 100% بدون تجميد - اختر الكمية وأضفها للسلة فوراً
-            </p>
-          </div>
-
-          {/* Quick Search */}
-          <div className="relative w-full sm:w-64">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="ابحث بالاسم (بلطي، جمبري...)"
-              className="w-full pl-3 pr-8 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-hidden"
-            />
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={handleClearSearch}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                title="مسح البحث"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Categories Bar */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar pt-1">
+      {/* Categories only — products start immediately below */}
+      <div className="w-full overflow-hidden">
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
           <button
             onClick={() => onSelectCategory('all')}
-            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all shrink-0 cursor-pointer ${
+            className={`px-3.5 py-2 rounded-xl font-bold text-xs transition-all shrink-0 cursor-pointer ${
               selectedCategory === 'all'
                 ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-950 shadow-2xs'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800'
             }`}
           >
             🐟 كل الأسماك ({visibleProducts.length})
           </button>
 
           {STORE_CATEGORIES.map((cat) => {
-            const count = visibleProducts.filter((p) => p.category === cat.id).length;
+            const count = visibleProducts.filter(
+              (product) => product.category === cat.id
+            ).length;
             const isSelected = selectedCategory === cat.id;
+
             return (
               <button
                 key={cat.id}
                 onClick={() => onSelectCategory(cat.id)}
-                className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all shrink-0 cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl font-bold text-xs transition-all shrink-0 cursor-pointer ${
                   isSelected
                     ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-950 shadow-2xs'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800'
                 }`}
               >
                 <span>{cat.emoji}</span>
                 <span className="mr-1">{cat.name}</span>
-                <span className="text-[10px] opacity-75 mr-1">({count})</span>
+                <span className="text-[10px] opacity-70 mr-1">
+                  ({count})
+                </span>
               </button>
             );
           })}
@@ -139,7 +94,7 @@ const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
 
       {/* Grid of Products or Skeleton / Empty */}
       {isLoadingData && visibleProducts.length === 0 ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 space-y-3 animate-pulse">
               <div className="w-full aspect-4/3 bg-slate-200 dark:bg-slate-800 rounded-xl" />
@@ -153,12 +108,12 @@ const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 sm:p-12 text-center border border-slate-200 dark:border-slate-800 space-y-4">
           <span className="text-4xl block">🐟</span>
           <h3 className="font-bold text-base text-slate-900 dark:text-white">
-            {visibleProducts.length === 0 ? 'قائمة صيد اليوم قيد التحديث' : 'لم نجد أي أسماك مطابقة لبحثك'}
+            {visibleProducts.length === 0 ? 'قائمة صيد اليوم قيد التحديث' : 'لا توجد منتجات في هذا التصنيف حالياً'}
           </h3>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
             {visibleProducts.length === 0 
               ? 'يتم تحديث تشكيلة الأسماك والمأكولات البحرية الطازجة حالياً. يمكنكم أيضاً التواصل معنا مباشرة عبر واتساب للاستفسار وحجز طلبكم.'
-              : 'جرب البحث باسم صنف آخر أو استعرض كل الأقسام'}
+              : 'اختر تصنيفاً آخر أو اعرض كل المنتجات'}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
             {visibleProducts.length === 0 ? (
@@ -190,7 +145,7 @@ const ProductsCatalogView = React.memo<ProductsCatalogViewProps>(({
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
           {filteredProducts.map((product) => (
             <ProductCard key={product.id} product={product} />
           ))}

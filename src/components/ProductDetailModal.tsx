@@ -48,11 +48,11 @@ export const ProductDetailModal: React.FC = () => {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-[70] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-hidden"
       onClick={() => setSelectedProductForModal(null)}
     >
       <div
-        className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 text-right animate-fade-in relative my-auto"
+        className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-lg max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 text-right animate-fade-in relative flex flex-col"
         onClick={(e) => e.stopPropagation()}
         id="product-detail-modal"
       >
@@ -65,7 +65,7 @@ export const ProductDetailModal: React.FC = () => {
         </button>
 
         {/* Product Image */}
-        <div className="relative aspect-16/10 w-full bg-slate-100 dark:bg-slate-800">
+        <div className="relative h-40 min-[390px]:h-44 sm:h-auto sm:aspect-16/10 w-full shrink-0 bg-slate-100 dark:bg-slate-800">
           <img
             src={product.image}
             alt={product.name}
@@ -92,7 +92,7 @@ export const ProductDetailModal: React.FC = () => {
         </div>
 
         {/* Content Body */}
-        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-3 sm:space-y-4 flex-1 min-h-0 overflow-y-auto overscroll-contain">
           
           <div>
             <div className="flex items-center justify-between">
