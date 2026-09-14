@@ -195,7 +195,19 @@ function mapSettings(s: AdminSettings): StoreSettings {
   };
 }
 
-export async function fetchAdminProducts(): Promise<Product[]> {
+const ADMIN_CACHE_TTL_MS = 20 * 1000;
+
+let cachedProducts: { data: Product[]; timestamp: number } | null = null;
+let cachedCategories: { data: StoreCategory[]; timestamp: number } | null = null;
+let cachedRegions: { data: DeliveryRegion[]; timestamp: number } | null = null;
+let cachedSettings: { data: StoreSettings; timestamp: number } | null = null;
+
+export async function fetchAdminProducts(forceRefresh = false): Promise<Product[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedProducts && now - cachedProducts.timestamp < ADMIN_CACHE_TTL_MS) {
+    return cachedProducts.data;
+  }
+
   const [products, categories] = await Promise.all([
     adminPublicGet<AdminProduct[]>('/products'),
     adminPublicGet<AdminCategory[]>('/categories'),
@@ -205,15 +217,23 @@ export async function fetchAdminProducts(): Promise<Product[]> {
     categories.map((category) => [String(category.id), category])
   );
 
-  return products
+  const mapped = products
     .map((product) => mapProduct(product, categoriesById))
     .filter((product) => product.isVisible);
+
+  cachedProducts = { data: mapped, timestamp: now };
+  return mapped;
 }
 
-export async function fetchAdminCategories(): Promise<StoreCategory[]> {
+export async function fetchAdminCategories(forceRefresh = false): Promise<StoreCategory[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedCategories && now - cachedCategories.timestamp < ADMIN_CACHE_TTL_MS) {
+    return cachedCategories.data;
+  }
+
   const categories = await adminPublicGet<AdminCategory[]>('/categories');
 
-  return categories
+  const mapped = categories
     .map((category) => ({
       id: String(category.id),
       name: category.name || '',
@@ -228,17 +248,36 @@ export async function fetchAdminCategories(): Promise<StoreCategory[]> {
     }))
     .filter((category) => category.isActive)
     .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  cachedCategories = { data: mapped, timestamp: now };
+  return mapped;
 }
 
-export async function fetchAdminRegions(): Promise<DeliveryRegion[]> {
+export async function fetchAdminRegions(forceRefresh = false): Promise<DeliveryRegion[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedRegions && now - cachedRegions.timestamp < ADMIN_CACHE_TTL_MS) {
+    return cachedRegions.data;
+  }
+
   const regions = await adminPublicGet<AdminRegion[]>('/delivery-regions');
 
-  return regions
+  const mapped = regions
     .map(mapRegion)
     .filter((region) => region.isActive);
+
+  cachedRegions = { data: mapped, timestamp: now };
+  return mapped;
 }
 
-export async function fetchAdminSettings(): Promise<StoreSettings> {
+export async function fetchAdminSettings(forceRefresh = false): Promise<StoreSettings> {
+  const now = Date.now();
+  if (!forceRefresh && cachedSettings && now - cachedSettings.timestamp < ADMIN_CACHE_TTL_MS) {
+    return cachedSettings.data;
+  }
+
   const settings = await adminPublicGet<AdminSettings>('/settings');
-  return mapSettings(settings);
+  const mapped = mapSettings(settings);
+
+  cachedSettings = { data: mapped, timestamp: now };
+  return mapped;
 }

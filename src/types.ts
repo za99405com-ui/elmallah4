@@ -75,13 +75,19 @@ export type OrderStatus =
   | 'delivered'    // 🟢 تم التسليم
   | 'cancelled';   // 🔴 تم الإلغاء
 
+export type PaymentMode = 
+  | 'deposit_online'    // دفع عربون أونلاين وتأكيد الحجز
+  | 'cash_on_delivery'; // الدفع بالكامل نقداً عند الاستلام
+
 export type PaymentMethod = 
-  | 'cash_on_delivery'  // الدفع عند الاستلام مع تحويل عربون
+  | 'cash_on_delivery'  // الدفع عند الاستلام
+  | 'card'              // بطاقة بنكية (فيزا / ماستركارد)
   | 'instapay'          // تحويل إنستاباي فوري
   | 'vodafone_cash';    // تحويل محفظة فودافون كاش
 
 export type DepositStatus = 
   | 'none'              // لا يوجد عربون
+  | 'not_required'      // غير مطلوب (الدفع عند الاستلام كاش)
   | 'pending'           // في انتظار تأكيد التحويل من الإدارة
   | 'confirmed'         // تم تأكيد استلام العربون
   | 'rejected';         // تم رفض التحويل / غير صحيح
@@ -120,6 +126,7 @@ export interface Order {
   total: number;
 
   // Deposit & Payment Information
+  paymentMode?: PaymentMode;
   paymentMethod: PaymentMethod;
   depositRequired: number;        // قيمة العربون المطلوب
   depositPaid: number;            // قيمة العربون المدفوع/المحول
@@ -149,6 +156,7 @@ export interface CreateOrderPayload {
     district?: string;
     address: string;
   };
+  paymentMode?: PaymentMode;
   paymentMethod: PaymentMethod;
   depositPaid?: number;
   depositTransactionRef?: string;

@@ -52,7 +52,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
   const discountedTotal = Math.max(0, cartSubtotal - couponDiscount);
   const finalTotal = discountedTotal + currentDeliveryFee;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -63,13 +63,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose })
 
     setIsSubmitting(true);
     try {
-      const order = createOrder({
+      const order = await createOrder({
         customerName: customerName.trim(),
         customerPhone: phone.trim(),
         governorate: activeRegion?.governorate || 'القاهرة',
         city: activeRegion?.cities[0] || 'الرئيسية',
         address: address.trim(),
         notes: notes.trim(),
+        paymentMode: paymentMethod === 'cash_on_delivery' ? 'cash_on_delivery' : 'deposit_online',
         paymentMethod,
         depositPaid: 0
       });

@@ -16,11 +16,15 @@ import {
   Copy,
   Check,
   ShieldCheck,
-  Loader2
+  Loader2,
+  Banknote,
+  Zap,
+  Smartphone,
+  CheckCircle2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useStore } from '../context/StoreContext';
-import { Order, PaymentMethod, CartItem, DeliveryRegion } from '../types';
+import { Order, PaymentMode, PaymentMethod, CartItem, DeliveryRegion } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
 
 /* -------------------------------------------------------------------------- */
@@ -256,158 +260,291 @@ CouponSection.displayName = 'CouponSection';
 /* Subcomponent 4: Payment Selector Box (Memoized)                           */
 /* -------------------------------------------------------------------------- */
 interface PaymentSelectorBoxProps {
-  paymentMethod: PaymentMethod;
+  paymentMode: PaymentMode;
+  onlineDepositMethod: 'card' | 'instapay' | 'vodafone_cash';
   cartDepositRequired: number;
   remainingUponDelivery: number;
   depositAmountToPay: number;
+  grandTotal: number;
   storeSettings: any;
   transactionRef: string;
   copiedKey: string | null;
   formErrorRef?: string;
-  onSelectPaymentMethod: (m: PaymentMethod) => void;
+  onSelectPaymentMode: (mode: PaymentMode) => void;
+  onSelectOnlineDepositMethod: (method: 'card' | 'instapay' | 'vodafone_cash') => void;
   onTransactionRefChange: (val: string) => void;
   onCopy: (text: string, key: string) => void;
 }
 
 const PaymentSelectorBox = React.memo<PaymentSelectorBoxProps>(({
-  paymentMethod,
+  paymentMode,
+  onlineDepositMethod,
   cartDepositRequired,
   remainingUponDelivery,
   depositAmountToPay,
+  grandTotal,
   storeSettings,
   transactionRef,
   copiedKey,
   formErrorRef,
-  onSelectPaymentMethod,
+  onSelectPaymentMode,
+  onSelectOnlineDepositMethod,
   onTransactionRefChange,
   onCopy
 }) => {
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-4">
-      <div className="flex items-center gap-2">
-        <CreditCard className="w-5 h-5 text-cyan-600" />
-        <h3 className="font-bold text-sm text-slate-900 dark:text-white">طريقة الدفع وسداد العربون</h3>
-      </div>
-
-      {/* Deposit Explanation */}
-      <div className="bg-cyan-50 dark:bg-slate-800/80 p-3 rounded-xl border border-cyan-200 dark:border-slate-700 text-xs space-y-1">
-        <div className="flex items-center gap-1.5 font-bold text-cyan-900 dark:text-cyan-200">
-          <ShieldCheck className="w-4 h-4 text-cyan-600" />
-          <span>نظام حجز وتأكيد الصيد الطازج (عربون الجدية):</span>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CreditCard className="w-5 h-5 text-cyan-600" />
+          <h3 className="font-bold text-sm text-slate-900 dark:text-white">طريقة الدفع وتأكيد الحجز</h3>
         </div>
-        <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-          نظراً لأن الأسماك طازجة صيد فجر يومي وتُحجز خصيصاً باسمك، يُرجى سداد عربون جدية قدره <strong>{cartDepositRequired} جنيه</strong> عبر إنستاباي أو فودافون كاش، وسداد المبلغ المتبقي (<strong>{remainingUponDelivery} جنيه</strong>) عند الاستلام.
-        </p>
+        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+          اختر نظام السداد الأنسب لك
+        </span>
       </div>
 
-      {/* Payment Method Selector */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-        {/* Option 1: Cash on Delivery with deposit */}
-        <button
-          type="button"
-          onClick={() => onSelectPaymentMethod('cash_on_delivery')}
-          className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
-            paymentMethod === 'cash_on_delivery'
-              ? 'border-cyan-600 bg-cyan-50/50 dark:bg-cyan-950/30 text-slate-900 dark:text-white shadow-2xs'
+      {/* Two Primary Choices: Deposit Online vs Cash on Delivery */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Choice A: Pay Deposit Online */}
+        <div
+          onClick={() => onSelectPaymentMode('deposit_online')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelectPaymentMode('deposit_online'); }}
+          className={`p-4 rounded-xl border text-right transition-all cursor-pointer relative flex flex-col justify-between ${
+            paymentMode === 'deposit_online'
+              ? 'border-cyan-600 bg-cyan-50/50 dark:bg-cyan-950/30 text-slate-900 dark:text-white ring-1 ring-cyan-500 shadow-xs'
               : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
           }`}
         >
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-bold text-xs">الدفع عند الاستلام</span>
-            <span className="text-base">💵</span>
-          </div>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">مع تحويل عربون {cartDepositRequired} ج</p>
-        </button>
-
-        {/* Option 2: InstaPay */}
-        <button
-          type="button"
-          onClick={() => onSelectPaymentMethod('instapay')}
-          className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
-            paymentMethod === 'instapay'
-              ? 'border-cyan-600 bg-cyan-50/50 dark:bg-cyan-950/30 text-slate-900 dark:text-white shadow-2xs'
-              : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
-          }`}
-        >
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-bold text-xs">إنستاباي (InstaPay)</span>
-            <span className="text-base">⚡</span>
-          </div>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">تحويل لحظي فوري</p>
-        </button>
-
-        {/* Option 3: Vodafone Cash */}
-        <button
-          type="button"
-          onClick={() => onSelectPaymentMethod('vodafone_cash')}
-          className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
-            paymentMethod === 'vodafone_cash'
-              ? 'border-cyan-600 bg-cyan-50/50 dark:bg-cyan-950/30 text-slate-900 dark:text-white shadow-2xs'
-              : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
-          }`}
-        >
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-bold text-xs">فودافون كاش / محافظ</span>
-            <span className="text-base">📱</span>
-          </div>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">تحويل محفظة إلكترونية</p>
-        </button>
-      </div>
-
-      {/* Payment Transfer Instructions Box */}
-      <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="font-bold text-slate-800 dark:text-slate-200">
-            {paymentMethod === 'instapay' ? 'بيانات التحويل عبر إنستاباي:' : 'بيانات التحويل عبر فودافون كاش:'}
-          </span>
-          <span className="text-cyan-700 dark:text-cyan-400 font-mono font-bold">العربون: {depositAmountToPay} جنيه</span>
-        </div>
-
-        <div className="flex items-center justify-between bg-white dark:bg-slate-900 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
-          <div>
-            <span className="text-[10px] text-slate-400 block">
-              {paymentMethod === 'instapay' ? 'رقم / حساب إنستاباي المعتمد:' : 'رقم محفظة فودافون كاش:'}
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                paymentMode === 'deposit_online'
+                  ? 'border-cyan-600 bg-cyan-600 text-white'
+                  : 'border-slate-300 dark:border-slate-600'
+              }`}>
+                {paymentMode === 'deposit_online' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+              </div>
+              <span className="font-bold text-sm text-slate-900 dark:text-white">سداد عربون أونلاين</span>
+            </div>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-900/60 text-cyan-800 dark:text-cyan-200">
+              تأكيد فوري
             </span>
-            <strong className="font-mono text-sm tracking-wider text-slate-900 dark:text-white" dir="ltr">
-              {paymentMethod === 'instapay' ? storeSettings.instapayNumber : storeSettings.vodafoneCashNumber}
-            </strong>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onCopy(
-              paymentMethod === 'instapay' ? storeSettings.instapayNumber : storeSettings.vodafoneCashNumber,
-              'payNum'
-            )}
-            className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-md font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-          >
-            {copiedKey === 'payNum' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copiedKey === 'payNum' ? 'تم النسخ' : 'نسخ الرقم'}</span>
-          </button>
+          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-2">
+            دفع عربون جدية ({cartDepositRequired} جنيه) لحجز صيد الفجر وتأكيده فورياً، وسداد المتبقي ({remainingUponDelivery} جنيه) عند الاستلام.
+          </p>
+
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-cyan-700 dark:text-cyan-300">
+            <Zap className="w-3.5 h-3.5" />
+            <span>بطاقة بنكية، إنستاباي، أو فودافون كاش</span>
+          </div>
         </div>
 
-        {/* Sender Phone/Account Input */}
-        <div>
-          <label className="block font-bold text-slate-800 dark:text-slate-200 text-xs mb-1">
-            رقم الهاتف أو الحساب المحول منه (إنستاباي / فودافون كاش): <span className="text-rose-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={transactionRef}
-            onChange={(e) => onTransactionRefChange(e.target.value)}
-            placeholder="مثال: 01012345678 أو حساب إنستاباي المرسل منه..."
-            className={`w-full px-3 py-2 bg-white dark:bg-slate-900 border rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-hidden ${
-              formErrorRef ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
-            }`}
-          />
-          {formErrorRef && (
-            <p className="text-rose-600 text-[11px] font-medium mt-0.5">{formErrorRef}</p>
+        {/* Choice B: Cash on Delivery */}
+        <div
+          onClick={() => onSelectPaymentMode('cash_on_delivery')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelectPaymentMode('cash_on_delivery'); }}
+          className={`p-4 rounded-xl border text-right transition-all cursor-pointer relative flex flex-col justify-between ${
+            paymentMode === 'cash_on_delivery'
+              ? 'border-cyan-600 bg-cyan-50/50 dark:bg-cyan-950/30 text-slate-900 dark:text-white ring-1 ring-cyan-500 shadow-xs'
+              : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                paymentMode === 'cash_on_delivery'
+                  ? 'border-cyan-600 bg-cyan-600 text-white'
+                  : 'border-slate-300 dark:border-slate-600'
+              }`}>
+                {paymentMode === 'cash_on_delivery' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+              </div>
+              <span className="font-bold text-sm text-slate-900 dark:text-white">الدفع نقداً عند الاستلام</span>
+            </div>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
+              بدون عربون
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-2">
+            سداد كامل قيمة الطلب ({grandTotal} جنيه) نقداً لمندوب التوصيل بعد استلام الأسماك الطازجة وفحصها بالكامل.
+          </p>
+
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+            <Banknote className="w-3.5 h-3.5" />
+            <span>كاش بالكامل عند الاستلام</span>
+          </div>
+        </div>
+      </div>
+
+      {/* MODE 1: PAY DEPOSIT ONLINE - REVEALS THE THREE SUPPORTED METHODS */}
+      {paymentMode === 'deposit_online' && (
+        <div className="space-y-3 pt-1">
+          {/* Deposit Explanation */}
+          <div className="bg-cyan-50 dark:bg-slate-800/80 p-3 rounded-xl border border-cyan-200 dark:border-slate-700 text-xs space-y-1">
+            <div className="flex items-center justify-between font-bold text-cyan-900 dark:text-cyan-200">
+              <div className="flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-cyan-600" />
+                <span>حجز صيد الفجر الطازج بعربون الجدية:</span>
+              </div>
+              <span className="font-mono text-cyan-800 dark:text-cyan-300 font-black">{depositAmountToPay} جنيه</span>
+            </div>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              لحجز الأسماك طازجة باسمك من صيد الفجر، يُرجى سداد عربون بقيمة <strong>{depositAmountToPay} جنيه</strong>، وسداد باقي المبلغ (<strong>{remainingUponDelivery} جنيه</strong>) لمندوب التوصيل.
+            </p>
+          </div>
+
+          {/* Sub-Tabs: 3 Supported Deposit Methods */}
+          <div className="grid grid-cols-3 gap-2">
+            {/* 1. Card */}
+            <button
+              type="button"
+              onClick={() => onSelectOnlineDepositMethod('card')}
+              className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1 ${
+                onlineDepositMethod === 'card'
+                  ? 'border-cyan-600 bg-cyan-50/70 dark:bg-cyan-950/50 text-cyan-900 dark:text-cyan-200 shadow-2xs'
+                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+              }`}
+            >
+              <CreditCard className="w-4 h-4 text-cyan-600" />
+              <span className="font-bold text-xs">بطاقة بنكية</span>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">فيزا / ماستر كارد</span>
+            </button>
+
+            {/* 2. InstaPay */}
+            <button
+              type="button"
+              onClick={() => onSelectOnlineDepositMethod('instapay')}
+              className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1 ${
+                onlineDepositMethod === 'instapay'
+                  ? 'border-cyan-600 bg-cyan-50/70 dark:bg-cyan-950/50 text-cyan-900 dark:text-cyan-200 shadow-2xs'
+                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+              }`}
+            >
+              <Zap className="w-4 h-4 text-amber-500" />
+              <span className="font-bold text-xs">إنستاباي</span>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">تحويل فوري لحظي</span>
+            </button>
+
+            {/* 3. Vodafone Cash */}
+            <button
+              type="button"
+              onClick={() => onSelectOnlineDepositMethod('vodafone_cash')}
+              className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1 ${
+                onlineDepositMethod === 'vodafone_cash'
+                  ? 'border-cyan-600 bg-cyan-50/70 dark:bg-cyan-950/50 text-cyan-900 dark:text-cyan-200 shadow-2xs'
+                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+              }`}
+            >
+              <Smartphone className="w-4 h-4 text-rose-500" />
+              <span className="font-bold text-xs">فودافون كاش</span>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">محفظة إلكترونية</span>
+            </button>
+          </div>
+
+          {/* Conditional Method Content */}
+          {onlineDepositMethod === 'card' && (
+            <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+              <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-slate-200">
+                <ShieldCheck className="w-4 h-4 text-cyan-600" />
+                <span>دفع إلكتروني آمن بالبطاقة البنكية</span>
+              </div>
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                يتم الدفع عبر بوابة دفع مشفرة بالكامل. لا نقوم بتسجيل أو تخزين أي بيانات للبطاقات البنكية. سيتم تسجيل وتأكيد الحجز فورياً في النظام.
+              </p>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+                <span>العربون المطلوب تحصيله بالبطاقة:</span>
+                <span className="font-bold text-cyan-700 dark:text-cyan-300 font-mono text-sm">{depositAmountToPay} جنيه</span>
+              </div>
+            </div>
           )}
-          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-            * يُرجى كتابة رقم المحول منه لمطابقة التحويل ومراجعته من قبل الإدارة لتأكيد الحجز.
+
+          {(onlineDepositMethod === 'instapay' || onlineDepositMethod === 'vodafone_cash') && (
+            <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800 dark:text-slate-200">
+                  {onlineDepositMethod === 'instapay' ? 'بيانات التحويل عبر إنستاباي:' : 'بيانات التحويل عبر فودافون كاش:'}
+                </span>
+                <span className="text-cyan-700 dark:text-cyan-400 font-mono font-bold">العربون: {depositAmountToPay} جنيه</span>
+              </div>
+
+              <div className="flex items-center justify-between bg-white dark:bg-slate-900 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
+                <div>
+                  <span className="text-[10px] text-slate-400 block">
+                    {onlineDepositMethod === 'instapay' ? 'رقم / حساب إنستاباي المعتمد:' : 'رقم محفظة فودافون كاش:'}
+                  </span>
+                  <strong className="font-mono text-sm tracking-wider text-slate-900 dark:text-white" dir="ltr">
+                    {onlineDepositMethod === 'instapay'
+                      ? (storeSettings.instapayNumber || '01015192040')
+                      : (storeSettings.vodafoneCashNumber || '01015192040')}
+                  </strong>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onCopy(
+                    onlineDepositMethod === 'instapay'
+                      ? (storeSettings.instapayNumber || '01015192040')
+                      : (storeSettings.vodafoneCashNumber || '01015192040'),
+                    'payNum'
+                  )}
+                  className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-md font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  {copiedKey === 'payNum' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedKey === 'payNum' ? 'تم النسخ' : 'نسخ الرقم'}</span>
+                </button>
+              </div>
+
+              {/* Sender Phone/Account Input */}
+              <div>
+                <label className="block font-bold text-slate-800 dark:text-slate-200 text-xs mb-1">
+                  {onlineDepositMethod === 'instapay'
+                    ? 'رقم الهاتف أو حساب إنستاباي المحول منه:'
+                    : 'رقم محفظة فودافون كاش المحول منها:'} <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={transactionRef}
+                  onChange={(e) => onTransactionRefChange(e.target.value)}
+                  placeholder={
+                    onlineDepositMethod === 'instapay'
+                      ? 'مثال: 01012345678 أو حساب إنستاباي المرسل منه...'
+                      : 'مثال: 01012345678...'
+                  }
+                  className={`w-full px-3 py-2 bg-white dark:bg-slate-900 border rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-hidden ${
+                    formErrorRef ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                  }`}
+                />
+                {formErrorRef && (
+                  <p className="text-rose-600 text-[11px] font-medium mt-0.5">{formErrorRef}</p>
+                )}
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  * يُرجى كتابة الرقم لمطابقة التحويل ومراجعته من قِبل إدارة المتجر لتأكيد الحجز.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODE 2: CASH ON DELIVERY - HIDES DEPOSIT INPUTS */}
+      {paymentMode === 'cash_on_delivery' && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 text-xs space-y-1.5">
+          <div className="flex items-center gap-1.5 font-bold text-emerald-900 dark:text-emerald-200">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>الدفع نقداً عند الاستلام متاح بدون أي عربون مسبق</span>
+          </div>
+          <p className="text-emerald-800/90 dark:text-emerald-300 leading-relaxed">
+            سيتم تجهيز طلبك طازجاً من صيد الفجر والتواصل معك هاتفياً قبل خروج مندوب التوصيل المبرد. سداد المبلغ بالكامل (<strong>{grandTotal} جنيه</strong>) نقداً لمندوب التوصيل عند استلام الأسماك.
           </p>
         </div>
-      </div>
+      )}
     </div>
   );
 });
@@ -465,8 +602,8 @@ export const CheckoutFlow: React.FC = React.memo(() => {
   const [couponSuccessMsg, setCouponSuccessMsg] = useState<string>('');
 
   // Payment & Deposit state
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash_on_delivery');
-  const [depositAmountToPay, setDepositAmountToPay] = useState<number>(cartDepositRequired);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('deposit_online');
+  const [onlineDepositMethod, setOnlineDepositMethod] = useState<'card' | 'instapay' | 'vodafone_cash'>('instapay');
   const [transactionRef, setTransactionRef] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -483,14 +620,11 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     }
   }, [selectedRegionId, currentRegion, city]);
 
-  useEffect(() => {
-    setDepositAmountToPay(cartDepositRequired);
-  }, [cartDepositRequired]);
-
   // Overall totals
   const totalBeforeDiscount = cartSubtotal + currentDeliveryFee;
   const grandTotal = useMemo(() => Math.max(0, totalBeforeDiscount - couponDiscount), [totalBeforeDiscount, couponDiscount]);
-  const remainingUponDelivery = useMemo(() => Math.max(0, grandTotal - depositAmountToPay), [grandTotal, depositAmountToPay]);
+  const depositAmountToPay = useMemo(() => paymentMode === 'cash_on_delivery' ? 0 : cartDepositRequired, [paymentMode, cartDepositRequired]);
+  const remainingUponDelivery = useMemo(() => paymentMode === 'cash_on_delivery' ? grandTotal : Math.max(0, grandTotal - depositAmountToPay), [paymentMode, grandTotal, depositAmountToPay]);
 
   const handleCopy = useCallback((text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -530,12 +664,14 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     if (currentRegion?.minOrderAmount && cartSubtotal < currentRegion.minOrderAmount) {
       errors.regionMin = `الحد الأدنى للطلب في منطقة ${currentRegion.governorate} هو ${currentRegion.minOrderAmount} جنيه`;
     }
-    if ((paymentMethod === 'instapay' || paymentMethod === 'vodafone_cash') && !transactionRef.trim()) {
-      errors.transactionRef = 'برجاء كتابة رقم الهاتف أو المحفظة المحول منها لمطابقة التحويل وتأكيد الحجز';
+    if (paymentMode === 'deposit_online') {
+      if ((onlineDepositMethod === 'instapay' || onlineDepositMethod === 'vodafone_cash') && !transactionRef.trim()) {
+        errors.transactionRef = 'برجاء كتابة رقم الهاتف أو المحفظة المحول منها لمطابقة التحويل وتأكيد الحجز';
+      }
     }
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
-  }, [customerName, customerPhone, address, currentRegion, cartSubtotal, paymentMethod, transactionRef]);
+  }, [customerName, customerPhone, address, currentRegion, cartSubtotal, paymentMode, onlineDepositMethod, transactionRef]);
 
   const handleProceedToDelivery = useCallback(() => {
     if (cart.length === 0) return;
@@ -551,6 +687,9 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     setIsSubmitting(true);
     setSubmitErrorMessage(null);
 
+    const effectivePaymentMethod: PaymentMethod =
+      paymentMode === 'cash_on_delivery' ? 'cash_on_delivery' : onlineDepositMethod;
+
     try {
       const order = await createOrder({
         customerName,
@@ -559,9 +698,15 @@ export const CheckoutFlow: React.FC = React.memo(() => {
         city,
         address,
         notes,
-        paymentMethod,
+        paymentMode,
+        paymentMethod: effectivePaymentMethod,
         depositPaid: depositAmountToPay,
-        depositTransactionRef: transactionRef
+        depositTransactionRef:
+          paymentMode === 'cash_on_delivery'
+            ? undefined
+            : onlineDepositMethod === 'card'
+              ? 'دفع إلكتروني بالبطاقة'
+              : transactionRef.trim()
       });
 
       setPlacedOrder(order);
@@ -594,7 +739,8 @@ export const CheckoutFlow: React.FC = React.memo(() => {
     city, 
     address, 
     notes, 
-    paymentMethod, 
+    paymentMode, 
+    onlineDepositMethod, 
     depositAmountToPay, 
     transactionRef
   ]);
@@ -885,15 +1031,18 @@ export const CheckoutFlow: React.FC = React.memo(() => {
 
           {/* PAYMENT METHODS & DEPOSIT BOX */}
           <PaymentSelectorBox
-            paymentMethod={paymentMethod}
+            paymentMode={paymentMode}
+            onlineDepositMethod={onlineDepositMethod}
             cartDepositRequired={cartDepositRequired}
             remainingUponDelivery={remainingUponDelivery}
             depositAmountToPay={depositAmountToPay}
+            grandTotal={grandTotal}
             storeSettings={storeSettings}
             transactionRef={transactionRef}
             copiedKey={copiedKey}
             formErrorRef={formErrors.transactionRef}
-            onSelectPaymentMethod={setPaymentMethod}
+            onSelectPaymentMode={setPaymentMode}
+            onSelectOnlineDepositMethod={setOnlineDepositMethod}
             onTransactionRefChange={setTransactionRef}
             onCopy={handleCopy}
           />
@@ -919,14 +1068,29 @@ export const CheckoutFlow: React.FC = React.memo(() => {
                 <span>إجمالي الطلب الكلي:</span>
                 <span className="text-base">{grandTotal} جنيه</span>
               </div>
-              <div className="flex justify-between text-cyan-700 dark:text-cyan-400 font-bold">
-                <span>العربون المطلوب سداده الآن:</span>
-                <span>{depositAmountToPay} جنيه</span>
-              </div>
-              <div className="flex justify-between text-slate-800 dark:text-slate-200 font-bold">
-                <span>المتبقي للدليفري عند الاستلام:</span>
-                <span>{remainingUponDelivery} جنيه</span>
-              </div>
+              {paymentMode === 'deposit_online' ? (
+                <>
+                  <div className="flex justify-between text-cyan-700 dark:text-cyan-400 font-bold">
+                    <span>العربون المطلوب سداده الآن:</span>
+                    <span>{depositAmountToPay} جنيه</span>
+                  </div>
+                  <div className="flex justify-between text-slate-800 dark:text-slate-200 font-bold">
+                    <span>المتبقي للدليفري عند الاستلام:</span>
+                    <span>{remainingUponDelivery} جنيه</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between text-slate-600 dark:text-slate-400 font-medium">
+                    <span>العربون المسبق:</span>
+                    <span className="text-emerald-600 font-bold">غير مطلوب (0 جنيه)</span>
+                  </div>
+                  <div className="flex justify-between text-emerald-700 dark:text-emerald-400 font-bold">
+                    <span>المطلوب سداده نقداً عند الاستلام:</span>
+                    <span>{grandTotal} جنيه</span>
+                  </div>
+                </>
+              )}
             </div>
 
             {submitErrorMessage && (
@@ -948,11 +1112,16 @@ export const CheckoutFlow: React.FC = React.memo(() => {
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>جارٍ تسجيل وتأكيد الحجز...</span>
+                  <span>جارٍ تسجيل وتأكيد الطلب...</span>
+                </>
+              ) : paymentMode === 'cash_on_delivery' ? (
+                <>
+                  <span>تأكيد الطلب والدفع عند الاستلام 🐟</span>
+                  <ArrowLeft className="w-4 h-4" />
                 </>
               ) : (
                 <>
-                  <span>إرسال الطلب للمراجعة وتأكيد الحجز 🐟</span>
+                  <span>إرسال الطلب ومراجعة العربون 🐟</span>
                   <ArrowLeft className="w-4 h-4" />
                 </>
               )}
@@ -967,22 +1136,32 @@ export const CheckoutFlow: React.FC = React.memo(() => {
           
           {/* Success Banner */}
           <div className="bg-slate-900 dark:bg-black text-white rounded-3xl p-6 sm:p-8 shadow-xs space-y-3 border border-slate-800">
-            <div className="w-14 h-14 bg-amber-500/20 text-amber-400 border border-amber-500/40 rounded-full flex items-center justify-center mx-auto text-2xl animate-pulse">
-              ⏳
+            <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto text-2xl ${
+              placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                : 'bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse'
+            }`}>
+              {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required' ? '🐟' : '⏳'}
             </div>
 
             <div className="space-y-1">
-              <h2 className="text-xl sm:text-2xl font-black">تم استلام طلبك وبانتظار مراجعة التحويل وتأكيد الحجز ⏳</h2>
+              <h2 className="text-xl sm:text-2xl font-black">
+                {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
+                  ? 'تم تأكيد تسجيل طلبك بنجاح! 🐟'
+                  : 'تم استلام طلبك وبانتظار مراجعة التحويل وتأكيد الحجز ⏳'}
+              </h2>
               <p className="text-slate-300 text-sm font-medium">
                 رقم الطلب: <span className="text-amber-300 font-mono font-bold text-lg">{placedOrder.orderNumber}</span>
               </p>
-              <p className="text-xs text-amber-200/90 max-w-md mx-auto pt-1">
-                طلبك الآن قيد المراجعة لدى إدارة متجر الملاح. سيتم تأكيد الحجز والبدء في التجهيز فور مراجعة رقم المحول منه ({placedOrder.depositTransactionRef}).
+              <p className="text-xs text-slate-300 max-w-md mx-auto pt-1 leading-relaxed">
+                {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
+                  ? 'طلبك قيد التجهيز من صيد الفجر الطازج وسيصلك مبرد. سداد المبلغ بالكامل نقداً لمندوب التوصيل عند الاستلام.'
+                  : `طلبك الآن قيد المراجعة لدى إدارة متجر الملاح. سيتم تأكيد الحجز والبدء في التجهيز فور مطابقة تحويل العربون${placedOrder.depositTransactionRef ? ` من الرقم (${placedOrder.depositTransactionRef})` : ''}.`}
               </p>
             </div>
 
             <div className="inline-block bg-slate-800 px-3 py-1 rounded-xl text-xs text-slate-200">
-              موعد التسليم المتوقع: <strong className="text-cyan-300">{placedOrder.deliveryTargetDate || 'اليوم'}</strong> ({placedOrder.estimatedDeliveryTime})
+              موعد التسليم المتوقع: <strong className="text-cyan-300">{placedOrder.deliveryTargetDate || 'اليوم'}</strong> ({placedOrder.estimatedDeliveryTime || 'مبرد'})
             </div>
           </div>
 
@@ -1011,21 +1190,37 @@ export const CheckoutFlow: React.FC = React.memo(() => {
                 <span>المبلغ الإجمالي:</span>
                 <span>{placedOrder.total} جنيه</span>
               </div>
-              <div className="flex justify-between text-amber-700 dark:text-amber-300 font-bold">
-                <span>العربون المحول (قيد المراجعة والتأكيد):</span>
-                <span>{placedOrder.depositPaid} جنيه</span>
-              </div>
-              <div className="flex justify-between text-slate-900 dark:text-white font-bold">
-                <span>المتبقي عند الاستلام:</span>
-                <span className="text-slate-900 dark:text-white font-black">{placedOrder.remainingAmount} جنيه</span>
-              </div>
+
+              {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required' ? (
+                <>
+                  <div className="flex justify-between text-emerald-600 font-bold">
+                    <span>طريقة الدفع:</span>
+                    <span>الدفع نقداً بالكامل عند الاستلام (كاش)</span>
+                  </div>
+                  <div className="flex justify-between text-slate-900 dark:text-white font-bold">
+                    <span>المطلوب سداده لمندوب التوصيل:</span>
+                    <span className="text-slate-900 dark:text-white font-black">{placedOrder.remainingAmount || placedOrder.total} جنيه</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between text-amber-700 dark:text-amber-300 font-bold">
+                    <span>العربون (قيد المراجعة والتأكيد):</span>
+                    <span>{placedOrder.depositPaid || placedOrder.depositRequired} جنيه</span>
+                  </div>
+                  <div className="flex justify-between text-slate-900 dark:text-white font-bold">
+                    <span>المتبقي عند الاستلام:</span>
+                    <span className="text-slate-900 dark:text-white font-black">{placedOrder.remainingAmount} جنيه</span>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="text-xs text-slate-600 dark:text-slate-400 space-y-0.5">
               <p><strong>العنوان:</strong> {placedOrder.governorate} - {placedOrder.city} - {placedOrder.address}</p>
               <p><strong>الهاتف:</strong> {placedOrder.customerPhone} ({placedOrder.customerName})</p>
               {placedOrder.depositTransactionRef && (
-                <p><strong>رقم الهاتف / الحساب المحول منه:</strong> <span className="font-bold font-mono text-cyan-800 dark:text-cyan-300" dir="ltr">{placedOrder.depositTransactionRef}</span></p>
+                <p><strong>المرجع / المحول منه:</strong> <span className="font-bold font-mono text-cyan-800 dark:text-cyan-300" dir="ltr">{placedOrder.depositTransactionRef}</span></p>
               )}
             </div>
 
@@ -1039,20 +1234,26 @@ export const CheckoutFlow: React.FC = React.memo(() => {
                 }}
                 className="flex-1 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-950 font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
-                <span>متابعة حالة المراجعة في طلباتي</span>
+                <span>متابعة حالة الطلب في طلباتي</span>
               </button>
 
               <a
                 href={getWhatsAppLink(
                   storeSettings.whatsappNumber,
-                  `مرحباً متجر الملاح، أنا صاحب الطلب رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه وقمت بتحويل العربون (${placedOrder.depositPaid} جنيه) من الرقم ${placedOrder.depositTransactionRef || ''}.`
+                  placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
+                    ? `مرحباً متجر الملاح، أود تأكيد طلبي رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه (الدفع كاش عند الاستلام).`
+                    : `مرحباً متجر الملاح، أنا صاحب الطلب رقم ${placedOrder.orderNumber} بقيمة ${placedOrder.total} جنيه وقمت بتحويل العربون (${placedOrder.depositPaid || placedOrder.depositRequired} جنيه)${placedOrder.depositTransactionRef ? ` من الرقم ${placedOrder.depositTransactionRef}` : ''}.`
                 )}
                 target="_blank"
                 rel="noreferrer"
                 className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <MessageCircle className="w-4 h-4" />
-                <span>إرسال إيصال التحويل عبر واتساب</span>
+                <span>
+                  {placedOrder.paymentMode === 'cash_on_delivery' || placedOrder.depositStatus === 'not_required'
+                    ? 'تأكيد الطلب عبر واتساب'
+                    : 'إرسال إيصال التحويل عبر واتساب'}
+                </span>
               </a>
             </div>
 

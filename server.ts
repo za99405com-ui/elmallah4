@@ -15,7 +15,8 @@ import type {
   StoreSettings, 
   CustomerUser, 
   CreateOrderPayload,
-  PaymentMethod 
+  PaymentMethod,
+  PaymentMode 
 } from './src/types.js';
 import { getServerSupabase } from './src/server/supabaseAdmin.js';
 import {
@@ -426,22 +427,47 @@ export async function createServer() {
   });
 
   // ==========================================
-  // PRODUCTS API
+  // PRODUCTS & CATEGORIES API (Authoritative Server Cache with 20s TTL)
   // ==========================================
 
   app.get('/api/categories', async (_req, res) => {
     try {
-      const data = await fetchAdminCategories();
+      if (process.env.ADMIN_API_BASE_URL) {
+        try {
+          const data = await fetchAdminCategories();
+          return res.json({
+            success: true,
+            count: data.length,
+            data,
+          });
+        } catch (adminErr) {
+          console.warn('[Admin API] Failed to load categories, using fresh server data:', adminErr);
+        }
+      }
+
+      await ensureFreshServerData();
+      const categoryMap = new Map<string, { id: string; name: string; slug: string; sortOrder: number }>();
+      for (const p of products) {
+        if (!categoryMap.has(p.category)) {
+          categoryMap.set(p.category, {
+            id: p.category,
+            name: p.category === 'fresh_sea' ? 'أسماك بحرية' : p.category === 'fresh_lake' ? 'أسماك نهرية' : p.category === 'fillet' ? 'فيليه ومجمد' : p.category === 'shrimp_seafood' ? 'جمبري ومأكولات بحرية' : 'عروض وباقات',
+            slug: p.category,
+            sortOrder: categoryMap.size + 1
+          });
+        }
+      }
+      const data = Array.from(categoryMap.values());
       return res.json({
         success: true,
         count: data.length,
         data,
       });
     } catch (err) {
-      console.error('[Admin API] Failed to load categories:', err);
+      console.error('Failed to load categories:', err);
       return res.status(503).json({
         success: false,
-        error: 'تعذر تحميل التصنيفات من نظام الإدارة حالياً',
+        error: 'تعذر تحميل التصنيفات حالياً',
         data: [],
       });
     }
@@ -450,7 +476,20 @@ export async function createServer() {
   app.get('/api/products', async (req, res) => {
     try {
       const { category, search, inStock } = req.query;
-      let result = await fetchAdminProducts();
+      let result: Product[] = [];
+
+      if (process.env.ADMIN_API_BASE_URL) {
+        try {
+          result = await fetchAdminProducts();
+        } catch (adminErr) {
+          console.warn('[Admin API] Failed to load products, using fresh server Supabase data:', adminErr);
+        }
+      }
+
+      if (!result || result.length === 0) {
+        await ensureFreshServerData();
+        result = [...products].filter(p => p.isVisible !== false);
+      }
 
       if (category && category !== 'all') {
         result = result.filter(p => p.category === category);
@@ -470,20 +509,35 @@ export async function createServer() {
       result.sort((a, b) => (a.sortOrder || 99) - (b.sortOrder || 99));
       return res.json({ success: true, count: result.length, data: result });
     } catch (err) {
-      console.error('[Admin API] Failed to load products:', err);
+      console.error('Failed to load products:', err);
       return res.status(503).json({
         success: false,
-        error: 'تعذر تحميل المنتجات من نظام الإدارة حالياً',
+        error: 'تعذر تحميل المنتجات حالياً',
       });
     }
   });
 
   app.get('/api/products/:id', async (req, res) => {
     try {
-      const adminProducts = await fetchAdminProducts();
-      const product = adminProducts.find(
-        p => p.id === req.params.id && p.isVisible !== false
-      );
+      let product: Product | undefined;
+
+      if (process.env.ADMIN_API_BASE_URL) {
+        try {
+          const adminProducts = await fetchAdminProducts();
+          product = adminProducts.find(
+            p => p.id === req.params.id && p.isVisible !== false
+          );
+        } catch (adminErr) {
+          console.warn('[Admin API] Failed to load product, using fresh server Supabase data:', adminErr);
+        }
+      }
+
+      if (!product) {
+        await ensureFreshServerData();
+        product = products.find(
+          p => p.id === req.params.id && p.isVisible !== false
+        );
+      }
 
       if (!product) {
         return res.status(404).json({
@@ -494,10 +548,10 @@ export async function createServer() {
 
       return res.json({ success: true, data: product });
     } catch (err) {
-      console.error('[Admin API] Failed to load product:', err);
+      console.error('Failed to load product:', err);
       return res.status(503).json({
         success: false,
-        error: 'تعذر تحميل بيانات المنتج من نظام الإدارة حالياً',
+        error: 'تعذر تحميل بيانات المنتج حالياً',
       });
     }
   });
@@ -810,23 +864,30 @@ export async function createServer() {
       cancelled: 'cancelled',
     };
 
+    const rawPaymentMethod = adminOrder.depositMethod;
+    const paymentMethod: PaymentMethod =
+      rawPaymentMethod === 'cash_on_delivery' ||
+      rawPaymentMethod === 'vodafone_cash' ||
+      rawPaymentMethod === 'instapay' ||
+      rawPaymentMethod === 'card'
+        ? rawPaymentMethod
+        : 'instapay';
+
+    const paymentMode: PaymentMode =
+      paymentMethod === 'cash_on_delivery'
+        ? 'cash_on_delivery'
+        : 'deposit_online';
+
     const depositStatus: Order['depositStatus'] =
       adminOrder.depositStatus === 'confirmed'
         ? 'confirmed'
         : adminOrder.depositStatus === 'rejected'
           ? 'rejected'
           : adminOrder.depositStatus === 'not_required' ||
+              paymentMode === 'cash_on_delivery' ||
               Number(adminOrder.depositAmount || 0) <= 0
-            ? 'none'
+            ? 'not_required'
             : 'pending';
-
-    const rawPaymentMethod = adminOrder.depositMethod;
-    const paymentMethod: PaymentMethod =
-      rawPaymentMethod === 'cash_on_delivery' ||
-      rawPaymentMethod === 'vodafone_cash' ||
-      rawPaymentMethod === 'instapay'
-        ? rawPaymentMethod
-        : 'instapay';
 
     return {
       id: String(adminOrder.id),
@@ -858,6 +919,7 @@ export async function createServer() {
       discountAmount: Number(adminOrder.discountAmount || 0),
       couponCode: adminOrder.couponCode,
       total: Number(adminOrder.totalAmount || 0),
+      paymentMode,
       paymentMethod,
       depositRequired: Number(adminOrder.depositAmount || 0),
       depositPaid:
@@ -1120,6 +1182,15 @@ export async function createServer() {
   }
 
   app.post('/api/orders', async (req, res) => {
+    await ensureFreshServerData();
+
+    if (settings && settings.isStoreOpen === false) {
+      return res.status(400).json({
+        success: false,
+        error: 'المتجر مغلق حالياً لاستقبال الطلبات، يرجى المحاولة أثناء ساعات العمل.',
+      });
+    }
+
     const payload: CreateOrderPayload = req.body;
 
     if (!payload || typeof payload !== 'object') {
@@ -1208,6 +1279,7 @@ export async function createServer() {
 
     const allowedPaymentMethods: PaymentMethod[] = [
       'cash_on_delivery',
+      'card',
       'instapay',
       'vodafone_cash',
     ];
@@ -1221,6 +1293,24 @@ export async function createServer() {
         error: 'طريقة الدفع المحددة غير مدعومة',
       });
     }
+
+    const resolvedPaymentMode: PaymentMode =
+      payload.paymentMode ||
+      (paymentMethod === 'cash_on_delivery'
+        ? 'cash_on_delivery'
+        : 'deposit_online');
+
+    const resolvedDepositMethod: PaymentMethod =
+      resolvedPaymentMode === 'cash_on_delivery'
+        ? 'cash_on_delivery'
+        : paymentMethod;
+
+    const resolvedDepositRef: string | undefined =
+      resolvedPaymentMode === 'cash_on_delivery'
+        ? undefined
+        : typeof depositTransactionRef === 'string' && depositTransactionRef.trim()
+          ? depositTransactionRef.trim().slice(0, 100)
+          : undefined;
 
     for (const item of items) {
       if (
@@ -1348,11 +1438,9 @@ export async function createServer() {
           typeof couponCode === 'string'
             ? couponCode.trim().slice(0, 30)
             : undefined,
-        depositMethod: paymentMethod,
-        depositReference:
-          typeof depositTransactionRef === 'string'
-            ? depositTransactionRef.trim().slice(0, 100)
-            : undefined,
+        paymentMode: resolvedPaymentMode,
+        depositMethod: resolvedDepositMethod,
+        depositReference: resolvedDepositRef,
         notes:
           typeof notes === 'string'
             ? notes.trim().slice(0, 500)
@@ -1397,7 +1485,8 @@ export async function createServer() {
         discountAmount: Number(adminOrder.discountAmount || 0),
         couponCode: adminOrder.couponCode,
         total: Number(adminOrder.totalAmount || 0),
-        paymentMethod,
+        paymentMode: resolvedPaymentMode,
+        paymentMethod: resolvedDepositMethod,
         depositRequired: Number(adminOrder.depositAmount || 0),
         depositPaid: 0,
         depositStatus:
@@ -1405,9 +1494,11 @@ export async function createServer() {
             ? 'confirmed'
             : adminOrder.depositStatus === 'rejected'
               ? 'rejected'
-              : Number(adminOrder.depositAmount || 0) > 0
-                ? 'pending'
-                : 'none',
+              : resolvedPaymentMode === 'cash_on_delivery' ||
+                adminOrder.depositStatus === 'not_required' ||
+                Number(adminOrder.depositAmount || 0) <= 0
+                ? 'not_required'
+                : 'pending',
         depositTransactionRef: adminOrder.depositReference,
         remainingAmount: Number(adminOrder.remainingAmount || 0),
         status: statusMap[adminOrder.status] || 'new',
@@ -1470,87 +1561,154 @@ export async function createServer() {
     const subtotal =
       Number.isFinite(rawTotal) && rawTotal >= 0 ? rawTotal : 0;
 
-    try {
-      const result = await adminIntegrationPost<{
-        valid: boolean;
-        code: string;
-        discountType: 'percentage' | 'fixed';
-        discountValue: number;
-        discountAmount: number;
-        minOrderValue?: number;
-        maxDiscountValue?: number;
-        expiryDate?: string;
-      }>('/integration/coupons/validate', {
-        code: code.trim(),
-        subtotal,
-      });
-
-      return res.json({
-        success: true,
-        message: `تم تطبيق كود الخصم بنجاح: خصم ${result.discountAmount} جنيه`,
-        data: {
-          code: result.code,
-          discountType: result.discountType,
-          discountValue: result.discountValue,
-          minOrderAmount: result.minOrderValue,
-          maxDiscount: result.maxDiscountValue,
-          discountAmount: result.discountAmount,
-        },
-      });
-    } catch (err: any) {
-      const status = Number(err?.status);
-
-      if (status === 400 || status === 404) {
-        const adminMessage =
-          err?.payload && typeof err.payload.error === 'string'
-            ? err.payload.error
-            : 'كود الخصم غير صالح أو غير متاح';
-
-        return res.status(status).json({
-          success: false,
-          error: adminMessage,
+    if (process.env.ADMIN_API_BASE_URL) {
+      try {
+        const result = await adminIntegrationPost<{
+          valid: boolean;
+          code: string;
+          discountType: 'percentage' | 'fixed';
+          discountValue: number;
+          discountAmount: number;
+          minOrderValue?: number;
+          maxDiscountValue?: number;
+          expiryDate?: string;
+        }>('/integration/coupons/validate', {
+          code: code.trim(),
+          subtotal,
         });
+
+        return res.json({
+          success: true,
+          message: `تم تطبيق كود الخصم بنجاح: خصم ${result.discountAmount} جنيه`,
+          data: {
+            code: result.code,
+            discountType: result.discountType,
+            discountValue: result.discountValue,
+            minOrderAmount: result.minOrderValue,
+            maxDiscount: result.maxDiscountValue,
+            discountAmount: result.discountAmount,
+          },
+        });
+      } catch (err: any) {
+        const status = Number(err?.status);
+
+        if (status === 400 || status === 404) {
+          const adminMessage =
+            err?.payload && typeof err.payload.error === 'string'
+              ? err.payload.error
+              : 'كود الخصم غير صالح أو غير متاح';
+
+          return res.status(status).json({
+            success: false,
+            error: adminMessage,
+          });
+        }
+
+        console.warn('[Admin API] Coupon validation failed, falling back to server coupons:', err);
       }
+    }
 
-      console.error('[Admin API] Coupon validation failed:', err);
+    // Fallback: Validate using fresh server Supabase data
+    await ensureFreshServerData();
+    const cleanCode = code.trim().toUpperCase();
+    const coupon = coupons.find(c => c.code.toUpperCase() === cleanCode && c.isActive !== false);
 
-      return res.status(503).json({
+    if (!coupon) {
+      return res.status(404).json({
         success: false,
-        error: 'تعذر التحقق من كود الخصم حالياً، يرجى المحاولة مرة أخرى',
+        error: 'كود الخصم غير موجود أو غير صالح',
       });
     }
+
+    if (coupon.minOrderAmount && subtotal < coupon.minOrderAmount) {
+      return res.status(400).json({
+        success: false,
+        error: `الحد الأدنى لتطبيق هذا الكوبون هو ${coupon.minOrderAmount} جنيه`,
+      });
+    }
+
+    let discountAmount = 0;
+    if (coupon.discountType === 'percentage') {
+      discountAmount = Math.round((subtotal * coupon.discountValue) / 100);
+      if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
+        discountAmount = coupon.maxDiscount;
+      }
+    } else {
+      discountAmount = Math.min(coupon.discountValue, subtotal);
+    }
+
+    return res.json({
+      success: true,
+      message: `تم تطبيق كود الخصم بنجاح: خصم ${discountAmount} جنيه`,
+      data: {
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        minOrderAmount: coupon.minOrderAmount,
+        maxDiscount: coupon.maxDiscount,
+        discountAmount,
+      },
+    });
   });
 
   // ==========================================
-  // REGIONS & SETTINGS (Public Customer info)
+  // REGIONS & SETTINGS (Public Customer info with 20s TTL Server Cache)
   // ==========================================
 
   app.get('/api/regions', async (_req, res) => {
     try {
-      const active = await fetchAdminRegions();
+      let active: DeliveryRegion[] = [];
+
+      if (process.env.ADMIN_API_BASE_URL) {
+        try {
+          active = await fetchAdminRegions();
+        } catch (adminErr) {
+          console.warn('[Admin API] Failed to load regions, using fresh server Supabase data:', adminErr);
+        }
+      }
+
+      if (!active || active.length === 0) {
+        await ensureFreshServerData();
+        active = regions.filter(r => r.isActive !== false);
+      }
+
       return res.json({
         success: true,
         count: active.length,
         data: active,
       });
     } catch (err) {
-      console.error('[Admin API] Failed to load regions:', err);
+      console.error('Failed to load regions:', err);
       return res.status(503).json({
         success: false,
-        error: 'تعذر تحميل مناطق التوصيل من نظام الإدارة حالياً',
+        error: 'تعذر تحميل مناطق التوصيل حالياً',
       });
     }
   });
 
   app.get('/api/settings', async (_req, res) => {
     try {
-      const safeSettings = await fetchAdminSettings();
+      let safeSettings: StoreSettings | null = null;
+
+      if (process.env.ADMIN_API_BASE_URL) {
+        try {
+          safeSettings = await fetchAdminSettings();
+        } catch (adminErr) {
+          console.warn('[Admin API] Failed to load settings, using fresh server Supabase data:', adminErr);
+        }
+      }
+
+      if (!safeSettings) {
+        await ensureFreshServerData();
+        safeSettings = settings;
+      }
+
       return res.json({ success: true, data: safeSettings });
     } catch (err) {
-      console.error('[Admin API] Failed to load settings:', err);
+      console.error('Failed to load settings:', err);
       return res.status(503).json({
         success: false,
-        error: 'تعذر تحميل إعدادات المتجر من نظام الإدارة حالياً',
+        error: 'تعذر تحميل إعدادات المتجر حالياً',
       });
     }
   });

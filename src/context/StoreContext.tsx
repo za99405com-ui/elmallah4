@@ -9,6 +9,7 @@ import {
   CustomerUser,
   UserAccount, 
   ProductCategory,
+  PaymentMode,
   PaymentMethod,
   Coupon,
   DeliveryRegion,
@@ -72,8 +73,10 @@ interface StoreContextType {
     customerPhone: string;
     governorate: string;
     city: string;
+    district?: string;
     address: string;
     notes?: string;
+    paymentMode?: PaymentMode;
     paymentMethod: PaymentMethod;
     depositPaid: number;
     depositTransactionRef?: string;
@@ -615,12 +618,20 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     customerPhone: string;
     governorate: string;
     city: string;
+    district?: string;
     address: string;
     notes?: string;
+    paymentMode?: PaymentMode;
     paymentMethod: PaymentMethod;
     depositPaid: number;
     depositTransactionRef?: string;
   }): Promise<Order> => {
+    const resolvedMode: PaymentMode =
+      orderData.paymentMode ||
+      (orderData.paymentMethod === 'cash_on_delivery'
+        ? 'cash_on_delivery'
+        : 'deposit_online');
+
     // Prepare payload for authoritative backend validation & Supabase recording
     const payload: CreateOrderPayload = {
       items: cart.map(item => ({
@@ -634,11 +645,14 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         customerPhone: orderData.customerPhone,
         governorate: orderData.governorate,
         city: orderData.city,
+        district: orderData.district,
         address: orderData.address
       },
+      paymentMode: resolvedMode,
       paymentMethod: orderData.paymentMethod,
-      depositPaid: orderData.depositPaid,
-      depositTransactionRef: orderData.depositTransactionRef,
+      depositPaid: resolvedMode === 'cash_on_delivery' ? 0 : orderData.depositPaid,
+      depositTransactionRef:
+        resolvedMode === 'cash_on_delivery' ? undefined : orderData.depositTransactionRef,
       couponCode: appliedCoupon?.code,
       notes: orderData.notes
     };
