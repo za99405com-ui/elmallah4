@@ -31,6 +31,28 @@ export async function createPaymentServer() {
   // Payment proxy first; base app remains the fallback for all pre-existing APIs
   // and the SPA/static pipeline.
   app.use('/api', paymentProxyRouter);
+
+  // The old checkout component still renders the legacy store-settings fields.
+  // Mask only those two customer-facing values so no static payment number is
+  // shown before admin3 assigns a device/session-specific destination.
+  app.use('/api/settings', (_req, res, next) => {
+    const originalJson = res.json.bind(res);
+    res.json = ((body: any) => {
+      if (body?.success && body?.data) {
+        body = {
+          ...body,
+          data: {
+            ...body.data,
+            instapayNumber: 'يتم تخصيص الحساب تلقائياً بعد إنشاء الطلب',
+            vodafoneCashNumber: 'يتم تخصيص الرقم تلقائياً بعد إنشاء الطلب',
+          },
+        };
+      }
+      return originalJson(body);
+    }) as typeof res.json;
+    next();
+  });
+
   app.use(baseApp);
 
   return app;
