@@ -108,7 +108,7 @@ export const RealtimePaymentOverlay: React.FC = () => {
     setContactingSupport(true);
     setSupportError(null);
     const result = await api.contactPaymentSupport(session);
-    if (result.success && result.data) {
+    if (result.success && 'data' in result && result.data) {
       setSession(result.data);
     } else {
       setSupportError(result.error || 'تعذر تسجيل طلب المراجعة. حاول مرة أخرى.');
