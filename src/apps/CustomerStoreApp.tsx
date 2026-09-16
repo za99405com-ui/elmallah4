@@ -21,7 +21,7 @@ import {
   Landmark,
 } from 'lucide-react';
 import { Product, ProductCategory, StoreCategory } from '../types';
-import { api, PaymentConfig } from '../utils/api';
+import { api, PaymentConfig, PaymentSession } from '../utils/api';
 import { getWhatsAppLink } from '../utils/whatsapp';
 
 interface ProductsCatalogViewProps {
@@ -173,6 +173,39 @@ export const CustomerStoreApp: React.FC = () => {
   const handleSelectCategory = useCallback((cat: ProductCategory | 'all') => {
     startTransition(() => setSelectedCategory(cat));
   }, [setSelectedCategory]);
+
+  // Payment success is the only online-payment path that may remain on checkout
+  // and advance to the "order confirmed" screen. Every non-paid terminal state
+  // moves the customer to Orders while the realtime overlay explains what happened.
+  useEffect(() => {
+    const onPaymentUpdate = (event: Event) => {
+      const session = (event as CustomEvent<PaymentSession>).detail;
+      if (!session) return;
+      if (
+        session.status === 'expired' ||
+        session.status === 'expired_needs_review' ||
+        session.status === 'needs_review' ||
+        session.status === 'cancelled'
+      ) {
+        setActiveTab('orders');
+      }
+    };
+
+    const onPaymentSessionError = (event: Event) => {
+      const detail = (event as CustomEvent<{ order?: { orderNumber?: string } }>).detail;
+      // Session allocation failed after the order was already durably created.
+      // Navigate away from checkout to avoid presenting a false confirmation page
+      // or encouraging a duplicate order submission.
+      if (detail?.order?.orderNumber) setActiveTab('orders');
+    };
+
+    window.addEventListener('almallah:payment-session-updated', onPaymentUpdate);
+    window.addEventListener('almallah:payment-session-error', onPaymentSessionError);
+    return () => {
+      window.removeEventListener('almallah:payment-session-updated', onPaymentUpdate);
+      window.removeEventListener('almallah:payment-session-error', onPaymentSessionError);
+    };
+  }, [setActiveTab]);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-cyan-500 selection:text-white transition-colors" dir="rtl">
