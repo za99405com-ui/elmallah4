@@ -1,10 +1,10 @@
-import { createServer } from '../server.js';
+import { createPaymentServer } from '../payment-server.js';
 
-let appPromise: ReturnType<typeof createServer> | null = null;
+let appPromise: ReturnType<typeof createPaymentServer> | null = null;
 
 export default async function handler(req: any, res: any) {
   if (!appPromise) {
-    appPromise = createServer();
+    appPromise = createPaymentServer();
   }
 
   const app = await appPromise;
