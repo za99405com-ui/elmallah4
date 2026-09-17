@@ -7,7 +7,6 @@ import { ProductCard } from '../components/ProductCard';
 import { ProductDetailModal } from '../components/ProductDetailModal';
 import { SearchModal } from '../components/SearchModal';
 import { CheckoutFlow } from '../components/CheckoutFlow';
-import { RealtimePaymentOverlay } from '../components/RealtimePaymentOverlay';
 import { OrdersTracker } from '../components/OrdersTracker';
 import { FavoritesView } from '../components/FavoritesView';
 import { SettingsView } from '../components/SettingsView';
@@ -16,9 +15,6 @@ import { Footer } from '../components/Footer';
 import {
   MessageCircle,
   ShoppingCart,
-  ShieldCheck,
-  Smartphone,
-  Landmark,
 } from 'lucide-react';
 import { Product, ProductCategory, StoreCategory } from '../types';
 import { api, PaymentConfig, PaymentSession } from '../utils/api';
@@ -121,37 +117,6 @@ const FloatingActionButtons = React.memo<FloatingActionButtonsProps>(({ whatsapp
 ));
 FloatingActionButtons.displayName = 'FloatingActionButtons';
 
-const PaymentPolicyBanner: React.FC = () => {
-  const [config, setConfig] = useState<PaymentConfig | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    void api.getPaymentConfig().then((result) => {
-      if (active && result.success && result.data) setConfig(result.data);
-    });
-    return () => { active = false; };
-  }, []);
-
-  if (!config) return null;
-
-  return (
-    <div className="rounded-2xl border border-cyan-200 dark:border-cyan-900 bg-cyan-50/70 dark:bg-cyan-950/30 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-      <div className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-200">
-        <ShieldCheck className="w-4 h-4 text-cyan-700 dark:text-cyan-300 shrink-0" />
-        <span className="font-bold">
-          {config.defaultPaymentPolicy === 'deposit_required'
-            ? 'سياسة الدفع الحالية: العربون الإلكتروني إجباري.'
-            : 'سياسة الدفع الحالية: يمكنك اختيار العربون الإلكتروني أو الدفع عند الاستلام.'}
-        </span>
-      </div>
-      <div className="flex items-center gap-2 text-[10px] font-black">
-        <span className={config.providers.vfCashAvailable ? 'text-emerald-600' : 'text-slate-400'}><Smartphone className="w-3.5 h-3.5 inline ml-1" />VF-Cash {config.providers.vfCashAvailable ? 'متاح' : 'غير متاح'}</span>
-        <span className={config.providers.bankAlAhlyAvailable ? 'text-emerald-600' : 'text-slate-400'}><Landmark className="w-3.5 h-3.5 inline ml-1" />البنك الأهلي {config.providers.bankAlAhlyAvailable ? 'متاح' : 'غير متاح'}</span>
-      </div>
-    </div>
-  );
-};
-
 export const CustomerStoreApp: React.FC = () => {
   const {
     activeTab,
@@ -174,39 +139,6 @@ export const CustomerStoreApp: React.FC = () => {
     startTransition(() => setSelectedCategory(cat));
   }, [setSelectedCategory]);
 
-  // Payment success is the only online-payment path that may remain on checkout
-  // and advance to the "order confirmed" screen. Every non-paid terminal state
-  // moves the customer to Orders while the realtime overlay explains what happened.
-  useEffect(() => {
-    const onPaymentUpdate = (event: Event) => {
-      const session = (event as CustomEvent<PaymentSession>).detail;
-      if (!session) return;
-      if (
-        session.status === 'expired' ||
-        session.status === 'expired_needs_review' ||
-        session.status === 'needs_review' ||
-        session.status === 'cancelled'
-      ) {
-        setActiveTab('orders');
-      }
-    };
-
-    const onPaymentSessionError = (event: Event) => {
-      const detail = (event as CustomEvent<{ order?: { orderNumber?: string } }>).detail;
-      // Session allocation failed after the order was already durably created.
-      // Navigate away from checkout to avoid presenting a false confirmation page
-      // or encouraging a duplicate order submission.
-      if (detail?.order?.orderNumber) setActiveTab('orders');
-    };
-
-    window.addEventListener('almallah:payment-session-updated', onPaymentUpdate);
-    window.addEventListener('almallah:payment-session-error', onPaymentSessionError);
-    return () => {
-      window.removeEventListener('almallah:payment-session-updated', onPaymentUpdate);
-      window.removeEventListener('almallah:payment-session-error', onPaymentSessionError);
-    };
-  }, [setActiveTab]);
-
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-cyan-500 selection:text-white transition-colors" dir="rtl">
       <Navbar />
@@ -225,12 +157,7 @@ export const CustomerStoreApp: React.FC = () => {
           />
         )}
 
-        {activeTab === 'cart' && (
-          <>
-            <PaymentPolicyBanner />
-            <CheckoutFlow />
-          </>
-        )}
+        {activeTab === 'cart' && <CheckoutFlow />}
 
         {activeTab === 'orders' && <OrdersTracker />}
         {activeTab === 'favorites' && <FavoritesView />}
@@ -249,7 +176,6 @@ export const CustomerStoreApp: React.FC = () => {
 
       <SearchModal />
       <ProductDetailModal />
-      <RealtimePaymentOverlay />
       <Footer />
       <BottomNav />
     </div>

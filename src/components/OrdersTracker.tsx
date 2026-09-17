@@ -23,7 +23,7 @@ import { Order, OrderStatus, getPaymentMethodLabel } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
 
 export const OrdersTracker: React.FC = React.memo(() => {
-  const { orders, reOrder, currentTrackedOrder, setActiveTab, storeSettings, refreshOrders } = useStore();
+  const { orders, reOrder, currentTrackedOrder, setActiveTab, storeSettings, refreshOrders, setResumedPaymentOrder } = useStore();
   const [searchPhoneOrNumber, setSearchPhoneOrNumber] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(
@@ -480,25 +480,40 @@ export const OrdersTracker: React.FC = React.memo(() => {
                       </div>
                     </div>
 
-                    {/* Actions: Re-order / WhatsApp Help */}
-                    <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                      <button
-                        onClick={() => reOrder(order)}
-                        className="flex-1 py-2 bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>إعادة طلب هذه الأسماك 🔁</span>
-                      </button>
+                    {/* Actions: Resume Payment / Re-order / WhatsApp Help */}
+                    <div className="space-y-2 pt-1">
+                      {order.depositStatus !== 'confirmed' && (order.paymentMode === 'deposit_online' || order.depositRequired > 0) && (
+                        <button
+                          onClick={() => {
+                            setResumedPaymentOrder(order);
+                            setActiveTab('cart');
+                          }}
+                          className="w-full py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <CreditCard className="w-4 h-4" />
+                          <span>إكمال دفع العربون لهذا الطلب ({order.depositRequired || 100} ج.م)</span>
+                        </button>
+                      )}
 
-                      <a
-                        href={getWhatsAppLink(storeSettings.whatsappNumber, `مرحباً متجر الملاح، استفسار ومساعدة بخصوص الطلب ${order.orderNumber}`)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" />
-                        <span>واتساب للمساعدة</span>
-                      </a>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                          onClick={() => reOrder(order)}
+                          className="flex-1 py-2 bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>إعادة طلب هذه الأسماك 🔁</span>
+                        </button>
+
+                        <a
+                          href={getWhatsAppLink(storeSettings.whatsappNumber, `مرحباً متجر الملاح، استفسار ومساعدة بخصوص الطلب ${order.orderNumber}`)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" />
+                          <span>واتساب للمساعدة</span>
+                        </a>
+                      </div>
                     </div>
 
                   </div>

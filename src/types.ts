@@ -155,6 +155,8 @@ export interface Order {
   depositStatus: DepositStatus;   // حالة مراجعة العربون
   depositTransactionRef?: string; // رقم المعاملة أو اسم المحول
   remainingAmount: number;        // المبلغ المتبقي للسداد عند الاستلام
+  activeSession?: any;            // جلسة الدفع اللحظي المرتبطة بالطلب
+  sessionError?: string;          // رسالة خطأ إنشاء جلسة الدفع إن وجدت
 
   status: OrderStatus;
   createdAt: string;

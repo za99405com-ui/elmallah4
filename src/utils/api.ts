@@ -198,6 +198,95 @@ async function waitForPaymentSession(initial: PaymentSession): Promise<PaymentSe
   });
 }
 
+export function subscribeToPaymentSession(
+  initial: PaymentSession,
+  onUpdate: (session: PaymentSession) => void
+): () => void {
+  if (typeof window === 'undefined') return () => {};
+
+  let current = initial;
+  let active = true;
+  let pollTimer: number | null = null;
+  let source: EventSource | null = null;
+
+  const terminal = new Set<PaymentSessionStatus>([
+    'paid',
+    'expired',
+    'expired_needs_review',
+    'needs_review',
+    'cancelled'
+  ]);
+
+  const cleanup = () => {
+    active = false;
+    source?.close();
+    if (pollTimer !== null) window.clearInterval(pollTimer);
+  };
+
+  const accept = (incoming: Partial<PaymentSession>) => {
+    if (!active) return;
+    current = { ...current, ...incoming };
+    dispatchPaymentEvent('almallah:payment-session-updated', current);
+    onUpdate(current);
+    if (terminal.has(current.status)) {
+      cleanup();
+      if (current.status === 'paid') {
+        dispatchPaymentEvent('almallah:payment-session-ended', current);
+      }
+    }
+  };
+
+  try {
+    const eventsUrl = `${API_BASE}/payments/sessions/${encodeURIComponent(initial.id)}/events?token=${encodeURIComponent(initial.clientToken)}`;
+    source = new EventSource(eventsUrl);
+
+    const handleEvent = (event: MessageEvent) => {
+      try {
+        accept(JSON.parse(event.data));
+      } catch {
+        // Fallback to polling
+      }
+    };
+
+    source.addEventListener('payment_session_updated', handleEvent as EventListener);
+    source.addEventListener('payment_confirmed', handleEvent as EventListener);
+    source.onmessage = handleEvent;
+  } catch {
+    // If EventSource fails, polling fallback handles it
+  }
+
+  // Poll fallback every 2.5s for fast status responsiveness
+  pollTimer = window.setInterval(async () => {
+    if (!active) return;
+    const status = await getPaymentSessionStatus(current);
+    if (status && active) {
+      accept(status);
+    }
+  }, 2500);
+
+  return cleanup;
+}
+
+export async function contactPaymentSupport(session: PaymentSession): Promise<{ success: boolean; data?: PaymentSession; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/payments/sessions/${encodeURIComponent(session.id)}/contact-support`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: session.clientToken })
+    });
+    return await parseJson(res);
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'تعذر إرسال طلب التواصل للدعم' };
+  }
+}
+
+export {
+  getPaymentConfig,
+  createPaymentSession,
+  getPaymentSessionStatus,
+  waitForPaymentSession
+};
+
 export const api = {
   async sendOtp(phone: string) {
     try {
@@ -374,7 +463,14 @@ export const api = {
     }
   },
 
-  async createOrder(payload: CreateOrderPayload): Promise<{ success: boolean; message?: string; data?: Order; error?: string }> {
+  async createOrder(payload: CreateOrderPayload): Promise<{
+    success: boolean;
+    message?: string;
+    data?: Order;
+    error?: string;
+    session?: PaymentSession;
+    sessionError?: string;
+  }> {
     try {
       // Enforce the current admin3 global payment policy before durable order creation.
       const configResult = await getPaymentConfig();
@@ -424,40 +520,26 @@ export const api = {
         });
         return {
           ...orderResult,
+          sessionError: sessionResult.error || 'لا يوجد جهاز دفع متاح حالياً. تم حفظ طلبك ويمكنك إتمام الدفع أو مراجعته في صفحة طلباتي.',
           message: sessionResult.error || 'تم تسجيل الطلب، لكن تعذر تخصيص جهاز دفع حالياً.'
         };
       }
 
-      let session = sessionResult.data;
+      const session = sessionResult.data;
       dispatchPaymentEvent('almallah:payment-session-started', session);
-      session = await waitForPaymentSession(session);
-
-      if (session.status === 'paid') {
-        const paidAmount = Number(session.matchedAmount ?? session.expectedAmount ?? 0);
-        const total = Number(orderResult.data.total || 0);
-        return {
-          ...orderResult,
-          data: {
-            ...orderResult.data,
-            depositStatus: 'confirmed',
-            depositPaid: paidAmount,
-            remainingAmount: Math.max(0, Math.round((total - paidAmount) * 100) / 100)
-          },
-          message: 'تم تأكيد العربون لحظياً وتأكيد الطلب.'
-        };
-      }
 
       return {
         ...orderResult,
-        message:
-          session.status === 'needs_review' || session.status === 'expired_needs_review'
-            ? 'تم تسجيل الطلب وتحويل الدفع للمراجعة اليدوية.'
-            : 'تم تسجيل الطلب، ولم يتم تأكيد العربون خلال المهلة.'
+        session,
+        message: 'تم تسجيل الطلب وجاري إكمال دفع العربون'
       };
     } catch (e: any) {
       return { success: false, error: e.message || 'فشل إرسال الطلب' };
     }
   },
+
+  subscribeToPaymentSession,
+  waitForPaymentSession,
 
   async getMyOrders(): Promise<{ success: boolean; count?: number; data: Order[] }> {
     try {

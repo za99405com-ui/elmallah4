@@ -84,6 +84,8 @@ interface StoreContextType {
   reOrder: (order: Order) => void;
   currentTrackedOrder: Order | null;
   setCurrentTrackedOrder: (order: Order | null) => void;
+  resumedPaymentOrder: Order | null;
+  setResumedPaymentOrder: (order: Order | null) => void;
   refreshOrders: (tokenOverride?: string) => Promise<void>;
 
   // Favorites
@@ -296,6 +298,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, [orders, customerDeviceId]);
 
   const [currentTrackedOrder, setCurrentTrackedOrder] = useState<Order | null>(null);
+  const [resumedPaymentOrder, setResumedPaymentOrder] = useState<Order | null>(null);
 
   // Favorites
   const [favorites, setFavorites] = useState<string[]>(() => {
@@ -665,7 +668,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     const confirmedOrder: Order = {
       ...serverRes.data,
-      deviceId: customerDeviceId
+      deviceId: customerDeviceId,
+      activeSession: (serverRes as any).session,
+      sessionError: (serverRes as any).sessionError
     };
 
     setOrders(prev => [confirmedOrder, ...prev]);
@@ -805,6 +810,8 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         reOrder,
         currentTrackedOrder,
         setCurrentTrackedOrder,
+        resumedPaymentOrder,
+        setResumedPaymentOrder,
         refreshOrders,
         favorites,
         toggleFavorite,
