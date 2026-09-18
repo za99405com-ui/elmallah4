@@ -247,6 +247,12 @@ export const CheckoutFlow: React.FC = () => {
   const [addressErrors, setAddressErrors] = useState<{ [key: string]: string }>({});
 
   // Payment Selection State
+  // Payment Selection State (Hierarchical top-level + sub-selection)
+  type TopPaymentOption = 'cod' | 'full_payment' | 'deposit';
+  type OnlinePaymentMethod = 'vodafone_cash' | 'instapay';
+
+  const [selectedTopOption, setSelectedTopOption] = useState<TopPaymentOption>('deposit');
+  const [selectedOnlineMethod, setSelectedOnlineMethod] = useState<OnlinePaymentMethod>('vodafone_cash');
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('deposit_online');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('vodafone_cash');
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
@@ -279,42 +285,115 @@ export const CheckoutFlow: React.FC = () => {
   const deliveryFee = currentRegion ? currentRegion.deliveryFee : 30;
   const totalAmount = Math.max(0, cartSubtotal + deliveryFee - couponDiscount);
 
-  // Effective deposit requirement from admin3
+  // Authoritative availability flags derived strictly from admin3
+  const isCodAvailable = useMemo(() => {
+    if (!paymentConfig) return true;
+    if (paymentConfig.defaultPaymentPolicy === 'deposit_required') return false;
+    if (paymentConfig.depositPolicy === 'mandatory') return false;
+    if (paymentConfig.codEnabled === false) return false;
+    return true;
+  }, [paymentConfig]);
+
+  const isDepositAvailable = useMemo(() => {
+    if (!paymentConfig) return true;
+    if (paymentConfig.depositEnabled === false) return false;
+    if (paymentConfig.depositPolicy === 'disabled') return false;
+    if (paymentConfig.providers && !paymentConfig.providers.vfCashAvailable && !paymentConfig.providers.bankAlAhlyAvailable) {
+      return false;
+    }
+    return true;
+  }, [paymentConfig]);
+
+  const isFullPaymentAvailable = useMemo(() => {
+    if (!paymentConfig) return true;
+    if (paymentConfig.providers && !paymentConfig.providers.vfCashAvailable && !paymentConfig.providers.bankAlAhlyAvailable) {
+      return false;
+    }
+    return true;
+  }, [paymentConfig]);
+
+  const isVfCashAvailable = useMemo(() => {
+    if (!paymentConfig) return true;
+    if (paymentConfig.customerPaymentMethods && paymentConfig.customerPaymentMethods.length > 0) {
+      const m = paymentConfig.customerPaymentMethods.find(x => x.code === 'vodafone_cash' || x.code === 'vf_cash');
+      if (m) return m.enabled;
+    }
+    return Boolean(paymentConfig.providers?.vfCashAvailable !== false);
+  }, [paymentConfig]);
+
+  const isInstapayAvailable = useMemo(() => {
+    if (!paymentConfig) return true;
+    if (paymentConfig.customerPaymentMethods && paymentConfig.customerPaymentMethods.length > 0) {
+      const m = paymentConfig.customerPaymentMethods.find(x => x.code === 'instapay' || x.code === 'bank_alahly');
+      if (m) return m.enabled;
+    }
+    return Boolean(paymentConfig.providers?.bankAlAhlyAvailable !== false);
+  }, [paymentConfig]);
+
+  // Effective authoritative deposit requirement from admin3
   const depositRequired = useMemo(() => {
-    if (paymentConfig?.defaultDepositAmount) {
-      return Math.min(paymentConfig.defaultDepositAmount, totalAmount);
+    if (paymentConfig?.depositAmount != null) {
+      return Math.min(Number(paymentConfig.depositAmount), totalAmount);
+    }
+    if (paymentConfig?.defaultDepositAmount != null) {
+      return Math.min(Number(paymentConfig.defaultDepositAmount), totalAmount);
     }
     return Math.min(100, totalAmount);
   }, [paymentConfig, totalAmount]);
 
-  const remainingAmount = Math.max(0, totalAmount - (paymentMode === 'cash_on_delivery' ? 0 : depositRequired));
+  const remainingAmount = useMemo(() => {
+    if (selectedTopOption === 'cod') return totalAmount;
+    if (selectedTopOption === 'full_payment') return 0;
+    return Math.max(0, totalAmount - depositRequired);
+  }, [selectedTopOption, totalAmount, depositRequired]);
 
   // Load payment configuration from admin3
   const fetchPaymentConfig = useCallback(async () => {
     setIsLoadingPaymentConfig(true);
     try {
-      const res = await api.getPaymentConfig();
+      const res = await api.getPaymentConfig(totalAmount);
       if (res.success && res.data) {
         setPaymentConfig(res.data);
-        // If COD is strictly forbidden by admin3, enforce online deposit
-        if (res.data.defaultPaymentPolicy === 'deposit_required') {
-          setPaymentMode('deposit_online');
-          // Pick the first available online provider
-          if (res.data.providers.vfCashAvailable) {
-            setPaymentMethod('vodafone_cash');
-          } else if (res.data.providers.bankAlAhlyAvailable) {
-            setPaymentMethod('instapay');
-          }
-        }
       }
     } finally {
       setIsLoadingPaymentConfig(false);
     }
-  }, []);
+  }, [totalAmount]);
 
   useEffect(() => {
     fetchPaymentConfig();
   }, [fetchPaymentConfig]);
+
+  // Sync selectedTopOption with admin3 availability
+  useEffect(() => {
+    if (selectedTopOption === 'cod' && !isCodAvailable) {
+      if (isDepositAvailable) setSelectedTopOption('deposit');
+      else if (isFullPaymentAvailable) setSelectedTopOption('full_payment');
+    } else if (selectedTopOption === 'deposit' && !isDepositAvailable) {
+      if (isFullPaymentAvailable) setSelectedTopOption('full_payment');
+      else if (isCodAvailable) setSelectedTopOption('cod');
+    }
+  }, [isCodAvailable, isDepositAvailable, isFullPaymentAvailable, selectedTopOption]);
+
+  // Sync selectedOnlineMethod with provider availability
+  useEffect(() => {
+    if (selectedOnlineMethod === 'vodafone_cash' && !isVfCashAvailable && isInstapayAvailable) {
+      setSelectedOnlineMethod('instapay');
+    } else if (selectedOnlineMethod === 'instapay' && !isInstapayAvailable && isVfCashAvailable) {
+      setSelectedOnlineMethod('vodafone_cash');
+    }
+  }, [isVfCashAvailable, isInstapayAvailable, selectedOnlineMethod]);
+
+  // Keep paymentMode and paymentMethod state synchronized for compatibility
+  useEffect(() => {
+    if (selectedTopOption === 'cod') {
+      setPaymentMode('cash_on_delivery');
+      setPaymentMethod('cash_on_delivery');
+    } else {
+      setPaymentMode('deposit_online');
+      setPaymentMethod(selectedOnlineMethod);
+    }
+  }, [selectedTopOption, selectedOnlineMethod]);
 
   // Check for resumed payment from OrdersTracker (Test Case J)
   useEffect(() => {
@@ -327,10 +406,13 @@ export const CheckoutFlow: React.FC = () => {
         setIsSubmittingOrder(true);
         try {
           const provider = resumedPaymentOrder.paymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
+          const isFull = (resumedPaymentOrder as any).paymentIntent === 'full_payment' || (resumedPaymentOrder.depositRequired >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
           const sessionRes = await api.createPaymentSession({
             orderId: resumedPaymentOrder.id,
             customerPhone: resumedPaymentOrder.customerPhone,
-            provider
+            provider,
+            paymentMethodCode: (resumedPaymentOrder as any).paymentMethodCode || resumedPaymentOrder.paymentMethod,
+            paymentIntent: isFull ? 'full_payment' : 'deposit'
           });
 
           if (sessionRes.success && sessionRes.data) {
@@ -351,7 +433,7 @@ export const CheckoutFlow: React.FC = () => {
     }
   }, [resumedPaymentOrder, setResumedPaymentOrder]);
 
-  // Check for stored active session on browser refresh (Test Case I)
+  // Check for stored active session on browser refresh (Contract status: waiting or legacy pending)
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
@@ -359,7 +441,8 @@ export const CheckoutFlow: React.FC = () => {
         const parsed = JSON.parse(saved);
         if (parsed?.order && parsed?.session) {
           const expiresAtMs = new Date(parsed.session.expiresAt).getTime();
-          if (expiresAtMs > Date.now() && parsed.session.status === 'pending') {
+          const isActive = parsed.session.status === 'waiting' || parsed.session.status === 'pending';
+          if (expiresAtMs > Date.now() && isActive) {
             setActiveOnlineOrder(parsed.order);
             setPaymentSession(parsed.session);
             setCurrentStep('online_payment');
@@ -375,7 +458,8 @@ export const CheckoutFlow: React.FC = () => {
 
   // Save active session to sessionStorage when updated
   useEffect(() => {
-    if (activeOnlineOrder && paymentSession && paymentSession.status === 'pending') {
+    const isSessionActive = paymentSession && (paymentSession.status === 'waiting' || paymentSession.status === 'pending');
+    if (activeOnlineOrder && isSessionActive) {
       try {
         sessionStorage.setItem(
           SESSION_STORAGE_KEY,
@@ -384,7 +468,7 @@ export const CheckoutFlow: React.FC = () => {
       } catch {
         // Ignore
       }
-    } else if (paymentSession && paymentSession.status !== 'pending') {
+    } else if (paymentSession && paymentSession.status !== 'waiting' && paymentSession.status !== 'pending') {
       sessionStorage.removeItem(SESSION_STORAGE_KEY);
     }
   }, [activeOnlineOrder, paymentSession]);
@@ -516,6 +600,11 @@ export const CheckoutFlow: React.FC = () => {
     try {
       const city = currentRegion && currentRegion.cities.length > 0 ? currentRegion.cities[0] : 'الإسكندرية';
 
+      const resolvedPaymentMode: PaymentMode = selectedTopOption === 'cod' ? 'cash_on_delivery' : 'deposit_online';
+      const resolvedPaymentMethod: PaymentMethod = selectedTopOption === 'cod' ? 'cash_on_delivery' : selectedOnlineMethod;
+      const paymentIntent: 'full_payment' | 'deposit' = selectedTopOption === 'full_payment' ? 'full_payment' : 'deposit';
+      const paymentMethodCode: string = resolvedPaymentMethod;
+
       const orderResult = await createOrder({
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
@@ -523,12 +612,14 @@ export const CheckoutFlow: React.FC = () => {
         city,
         address: address.trim(),
         notes: orderNotes.trim() || undefined,
-        paymentMode,
-        paymentMethod
+        paymentMode: resolvedPaymentMode,
+        paymentMethod: resolvedPaymentMethod,
+        paymentIntent,
+        paymentMethodCode
       });
 
       // Case A: Cash on Delivery (no online deposit)
-      if (paymentMode === 'cash_on_delivery') {
+      if (resolvedPaymentMode === 'cash_on_delivery') {
         setConfirmedOrder(orderResult);
         setCurrentTrackedOrder(orderResult);
         setCurrentStep('confirmation');
@@ -540,7 +631,7 @@ export const CheckoutFlow: React.FC = () => {
         return;
       }
 
-      // Case B/C: Online Deposit Required
+      // Case B/C: Online Payment (Full Payment or Deposit)
       setActiveOnlineOrder(orderResult);
 
       if (orderResult.activeSession) {
@@ -552,11 +643,13 @@ export const CheckoutFlow: React.FC = () => {
         setCurrentStep('online_payment');
       } else {
         // Fallback: create session manually
-        const provider = paymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
+        const provider = resolvedPaymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
         const sessionRes = await api.createPaymentSession({
           orderId: orderResult.id,
           customerPhone: customerPhone.trim(),
-          provider
+          provider,
+          paymentMethodCode,
+          paymentIntent
         });
 
         if (sessionRes.success && sessionRes.data) {
@@ -579,8 +672,9 @@ export const CheckoutFlow: React.FC = () => {
   /* Step 4: Handlers (Online Payment Completion)                               */
   /* -------------------------------------------------------------------------- */
   const handleCopyAccount = () => {
-    if (!paymentSession?.accountNumber) return;
-    navigator.clipboard.writeText(paymentSession.accountNumber);
+    const acc = paymentSession?.accountNumber || paymentSession?.paymentDestination;
+    if (!acc) return;
+    navigator.clipboard.writeText(acc);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
   };
@@ -961,159 +1055,313 @@ export const CheckoutFlow: React.FC = () => {
               <ShieldCheck className="w-5 h-5 text-cyan-700 dark:text-cyan-400 shrink-0 mt-0.5" />
               <div className="space-y-1 text-xs">
                 <h4 className="font-bold text-cyan-950 dark:text-cyan-100">
-                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required'
-                    ? 'يلزم سداد عربون لتأكيد الطلب'
+                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy === 'mandatory'
+                    ? 'يلزم سداد عربون أو الدفع إلكترونياً لتأكيد الطلب'
                     : 'خيارات الدفع المتاحة لطلبك'}
                 </h4>
                 <p className="text-cyan-900/80 dark:text-cyan-200/80 leading-relaxed text-[11px]">
-                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required'
-                    ? `نظراً لأن الأسماك تُجهز وتُنظف طازجة خصيصاً لك صيد اليوم، يلزم سداد عربون رمزي بقيمة ${depositRequired} جنيه لتأكيد تجهيز الطلب، والمبلغ المتبقي (${remainingAmount} جنيه) يُسدد نقداً عند الاستلام.`
-                    : `يمكنك اختيار دفع عربون رمزي لتأكيد الطلب وبدء التجهيز، أو اختيار الدفع بالكامل نقداً عند الاستلام.`}
+                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy === 'mandatory'
+                    ? `نظراً لأن الأسماك تُجهز وتُنظف طازجة خصيصاً لك صيد اليوم، يلزم تأكيد الطلب إلكترونياً (سواء بدفع عربون بقيمة ${depositRequired} جنيه وسداد الباقي عند الاستلام، أو سداد كامل المبلغ).`
+                    : `يمكنك اختيار الدفع نقداً عند الاستلام، أو سداد كامل المبلغ إلكترونياً، أو دفع عربون لتأكيد الطلب وتجهيزه.`}
                 </p>
               </div>
             </div>
           </div>
 
           {/* Payment Method Options */}
-          <div className="space-y-2.5">
-            {/* Option 1: Cash on Delivery (only if allowed by admin3 policy) */}
-            {paymentConfig?.defaultPaymentPolicy !== 'deposit_required' && (
-              <label
-                className={`block p-4 rounded-2xl border transition-all cursor-pointer ${
-                  paymentMode === 'cash_on_delivery'
+          <div className="space-y-3">
+            {/* Top-Level Option 1: Cash On Delivery (COD) */}
+            {isCodAvailable && (
+              <div
+                onClick={() => setSelectedTopOption('cod')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+                  selectedTopOption === 'cod'
                     ? 'border-cyan-700 bg-cyan-50/40 dark:bg-cyan-950/30 ring-1 ring-cyan-700'
-                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <input
                       type="radio"
-                      name="payment_option"
-                      checked={paymentMode === 'cash_on_delivery'}
-                      onChange={() => {
-                        setPaymentMode('cash_on_delivery');
-                        setPaymentMethod('cash_on_delivery');
-                      }}
+                      name="top_payment_option"
+                      checked={selectedTopOption === 'cod'}
+                      onChange={() => setSelectedTopOption('cod')}
                       className="w-4 h-4 text-cyan-700 focus:ring-cyan-500"
                     />
                     <div>
                       <div className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm flex items-center gap-2">
-                        <span>الدفع نقداً عند الاستلام</span>
+                        <Truck className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                        <span>الدفع نقداً عند الاستلام (COD)</span>
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                         سداد إجمالي المبلغ ({totalAmount} جنيه) نقداً لمندوب التوصيل عند استلام الأسماك.
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs font-black text-slate-700 dark:text-slate-300">
-                    {totalAmount} ج
-                  </span>
+                  <div className="text-left">
+                    <span className="text-xs font-black text-slate-700 dark:text-slate-300 block">
+                      {totalAmount} ج
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      عند الاستلام
+                    </span>
+                  </div>
                 </div>
-              </label>
+              </div>
             )}
 
-            {/* Option 2: Vodafone Cash (Online Deposit) */}
-            <label
-              className={`block p-4 rounded-2xl border transition-all cursor-pointer ${
-                paymentMode === 'deposit_online' && paymentMethod === 'vodafone_cash'
-                  ? 'border-cyan-700 bg-cyan-50/40 dark:bg-cyan-950/30 ring-1 ring-cyan-700'
-                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300'
-              } ${paymentConfig && !paymentConfig.providers.vfCashAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="radio"
-                    name="payment_option"
-                    disabled={paymentConfig ? !paymentConfig.providers.vfCashAvailable : false}
-                    checked={paymentMode === 'deposit_online' && paymentMethod === 'vodafone_cash'}
-                    onChange={() => {
-                      setPaymentMode('deposit_online');
-                      setPaymentMethod('vodafone_cash');
-                    }}
-                    className="w-4 h-4 text-cyan-700 focus:ring-cyan-500"
-                  />
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm flex items-center gap-2">
-                      <Smartphone className="w-4 h-4 text-rose-600" />
-                      <span>فودافون كاش (Vodafone Cash)</span>
-                      {paymentConfig?.providers.vfCashAvailable ? (
-                        <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          متاح لحظياً
+            {/* Top-Level Option 2: Full Payment */}
+            {isFullPaymentAvailable && (
+              <div
+                className={`p-4 rounded-2xl border transition-all ${
+                  selectedTopOption === 'full_payment'
+                    ? 'border-cyan-700 bg-cyan-50/40 dark:bg-cyan-950/30 ring-1 ring-cyan-700'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                <div
+                  onClick={() => setSelectedTopOption('full_payment')}
+                  className="flex items-center justify-between cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="top_payment_option"
+                      checked={selectedTopOption === 'full_payment'}
+                      onChange={() => setSelectedTopOption('full_payment')}
+                      className="w-4 h-4 text-cyan-700 focus:ring-cyan-500"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm flex items-center gap-2">
+                        <CreditCard className="w-4 h-4 text-cyan-700 dark:text-cyan-400" />
+                        <span>سداد كامل المبلغ إلكترونياً</span>
+                        <span className="bg-cyan-100 dark:bg-cyan-950 text-cyan-800 dark:text-cyan-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          فودافون كاش / إنستاباي
                         </span>
-                      ) : (
-                        <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          غير متاح حالياً
-                        </span>
-                      )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        سداد كامل قيمة الطلب ({totalAmount} جنيه) إلكترونياً مع تأكيد فوري.
+                      </p>
                     </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                      تحويل عربون ({depositRequired} ج) عبر فودافون كاش، وتأكيد فوري لحظة وصول التحويل.
-                    </p>
+                  </div>
+                  <div className="text-left">
+                    <span className="text-xs font-black text-cyan-700 dark:text-cyan-400 block">
+                      {totalAmount} ج الآن
+                    </span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                      0 ج عند الاستلام
+                    </span>
                   </div>
                 </div>
-                <div className="text-left">
-                  <span className="text-xs font-black text-cyan-700 dark:text-cyan-400 block">
-                    {depositRequired} ج الآن
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    متبقي {remainingAmount} ج
-                  </span>
-                </div>
-              </div>
-            </label>
 
-            {/* Option 3: InstaPay / Bank Al Ahly (Online Deposit) */}
-            <label
-              className={`block p-4 rounded-2xl border transition-all cursor-pointer ${
-                paymentMode === 'deposit_online' && paymentMethod === 'instapay'
-                  ? 'border-cyan-700 bg-cyan-50/40 dark:bg-cyan-950/30 ring-1 ring-cyan-700'
-                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300'
-              } ${paymentConfig && !paymentConfig.providers.bankAlAhlyAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="radio"
-                    name="payment_option"
-                    disabled={paymentConfig ? !paymentConfig.providers.bankAlAhlyAvailable : false}
-                    checked={paymentMode === 'deposit_online' && paymentMethod === 'instapay'}
-                    onChange={() => {
-                      setPaymentMode('deposit_online');
-                      setPaymentMethod('instapay');
-                    }}
-                    className="w-4 h-4 text-cyan-700 focus:ring-cyan-500"
-                  />
-                  <div>
-                    <div className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm flex items-center gap-2">
-                      <Landmark className="w-4 h-4 text-amber-600" />
-                      <span>إنستاباي / البنك الأهلي (InstaPay)</span>
-                      {paymentConfig?.providers.bankAlAhlyAvailable ? (
-                        <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          متاح لحظياً
-                        </span>
-                      ) : (
-                        <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          غير متاح حالياً
-                        </span>
-                      )}
+                {/* Sub-selection for Full Payment */}
+                {selectedTopOption === 'full_payment' && (
+                  <div className="mt-3 pt-3 border-t border-cyan-200/60 dark:border-cyan-900/50 space-y-2">
+                    <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <span>اختر وسيلة الدفع الإلكتروني:</span>
                     </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                      تحويل عبر إنستاباي أو حساب البنك الأهلي المصري مع تأكيد فوري تلقائي.
-                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div
+                        onClick={() => isVfCashAvailable && setSelectedOnlineMethod('vodafone_cash')}
+                        className={`p-3 rounded-xl border transition-all ${
+                          selectedOnlineMethod === 'vodafone_cash'
+                            ? 'border-cyan-700 bg-white dark:bg-slate-900 ring-1 ring-cyan-700 shadow-2xs'
+                            : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 hover:border-slate-300'
+                        } ${isVfCashAvailable ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="full_online_method"
+                              disabled={!isVfCashAvailable}
+                              checked={selectedOnlineMethod === 'vodafone_cash'}
+                              onChange={() => setSelectedOnlineMethod('vodafone_cash')}
+                              className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
+                            />
+                            <Smartphone className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">فودافون كاش</span>
+                          </div>
+                          {isVfCashAvailable ? (
+                            <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              متاح
+                            </span>
+                          ) : (
+                            <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              غير متاح
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div
+                        onClick={() => isInstapayAvailable && setSelectedOnlineMethod('instapay')}
+                        className={`p-3 rounded-xl border transition-all ${
+                          selectedOnlineMethod === 'instapay'
+                            ? 'border-cyan-700 bg-white dark:bg-slate-900 ring-1 ring-cyan-700 shadow-2xs'
+                            : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 hover:border-slate-300'
+                        } ${isInstapayAvailable ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="full_online_method"
+                              disabled={!isInstapayAvailable}
+                              checked={selectedOnlineMethod === 'instapay'}
+                              onChange={() => setSelectedOnlineMethod('instapay')}
+                              className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
+                            />
+                            <Landmark className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي / البنك الأهلي</span>
+                          </div>
+                          {isInstapayAvailable ? (
+                            <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              متاح
+                            </span>
+                          ) : (
+                            <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              غير متاح
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Top-Level Option 3: Deposit Payment */}
+            {isDepositAvailable && (
+              <div
+                className={`p-4 rounded-2xl border transition-all ${
+                  selectedTopOption === 'deposit'
+                    ? 'border-cyan-700 bg-cyan-50/40 dark:bg-cyan-950/30 ring-1 ring-cyan-700'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                <div
+                  onClick={() => setSelectedTopOption('deposit')}
+                  className="flex items-center justify-between cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="top_payment_option"
+                      checked={selectedTopOption === 'deposit'}
+                      onChange={() => setSelectedTopOption('deposit')}
+                      className="w-4 h-4 text-cyan-700 focus:ring-cyan-500"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-cyan-700 dark:text-cyan-400" />
+                        <span>سداد عربون لتأكيد الطلب</span>
+                        <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          عربون {depositRequired} ج
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        دفع عربون رمزي ({depositRequired} جنيه) لتأكيد وتجهيز الطلب، والمتبقي نقداً عند الاستلام.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <span className="text-xs font-black text-cyan-700 dark:text-cyan-400 block">
+                      {depositRequired} ج الآن
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      متبقي {remainingAmount} ج
+                    </span>
                   </div>
                 </div>
-                <div className="text-left">
-                  <span className="text-xs font-black text-cyan-700 dark:text-cyan-400 block">
-                    {depositRequired} ج الآن
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    متبقي {remainingAmount} ج
-                  </span>
-                </div>
+
+                {/* Expanded: Choose Deposit Method (Vodafone Cash, InstaPay) */}
+                {selectedTopOption === 'deposit' && (
+                  <div className="mt-3 pt-3 border-t border-cyan-200/60 dark:border-cyan-900/50 space-y-2">
+                    <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <span>اختر طريقة سداد العربون:</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {/* Sub-option A: Vodafone Cash */}
+                      <div
+                        onClick={() => isVfCashAvailable && setSelectedOnlineMethod('vodafone_cash')}
+                        className={`p-3 rounded-xl border transition-all ${
+                          selectedOnlineMethod === 'vodafone_cash'
+                            ? 'border-cyan-700 bg-white dark:bg-slate-900 ring-1 ring-cyan-700 shadow-2xs'
+                            : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 hover:border-slate-300'
+                        } ${isVfCashAvailable ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="deposit_sub_method"
+                              disabled={!isVfCashAvailable}
+                              checked={selectedOnlineMethod === 'vodafone_cash'}
+                              onChange={() => setSelectedOnlineMethod('vodafone_cash')}
+                              className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
+                            />
+                            <Smartphone className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">فودافون كاش</span>
+                          </div>
+                          {isVfCashAvailable ? (
+                            <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              متاح
+                            </span>
+                          ) : (
+                            <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              غير متاح
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5 pr-5.5">
+                          تحويل {depositRequired} ج عبر محفظة فودافون كاش وتأكيد لحظي.
+                        </p>
+                      </div>
+
+                      {/* Sub-option B: InstaPay */}
+                      <div
+                        onClick={() => isInstapayAvailable && setSelectedOnlineMethod('instapay')}
+                        className={`p-3 rounded-xl border transition-all ${
+                          selectedOnlineMethod === 'instapay'
+                            ? 'border-cyan-700 bg-white dark:bg-slate-900 ring-1 ring-cyan-700 shadow-2xs'
+                            : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 hover:border-slate-300'
+                        } ${isInstapayAvailable ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="deposit_sub_method"
+                              disabled={!isInstapayAvailable}
+                              checked={selectedOnlineMethod === 'instapay'}
+                              onChange={() => setSelectedOnlineMethod('instapay')}
+                              className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
+                            />
+                            <Landmark className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي / البنك الأهلي</span>
+                          </div>
+                          {isInstapayAvailable ? (
+                            <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              متاح
+                            </span>
+                          ) : (
+                            <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              غير متاح
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5 pr-5.5">
+                          تحويل {depositRequired} ج عبر إنستاباي أو الحساب البنكي.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            </label>
+            )}
           </div>
 
           {/* Final Order Summary Card */}
@@ -1137,7 +1385,20 @@ export const CheckoutFlow: React.FC = () => {
               <span className="text-base font-black text-slate-900 dark:text-white">{totalAmount} جنيه</span>
             </div>
 
-            {paymentMode === 'deposit_online' && (
+            {selectedTopOption === 'full_payment' && (
+              <div className="mt-2 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700 space-y-1">
+                <div className="flex justify-between text-cyan-800 dark:text-cyan-300 font-black">
+                  <span>المطلوب تحويله الآن بالكامل:</span>
+                  <span>{totalAmount} جنيه</span>
+                </div>
+                <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-medium text-[11px]">
+                  <span>المتبقي عند الاستلام:</span>
+                  <span>0 جنيه (مدفوع بالكامل)</span>
+                </div>
+              </div>
+            )}
+
+            {selectedTopOption === 'deposit' && (
               <div className="mt-2 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700 space-y-1">
                 <div className="flex justify-between text-cyan-800 dark:text-cyan-300 font-black">
                   <span>العربون المطلوب تحويله الآن:</span>
@@ -1146,6 +1407,19 @@ export const CheckoutFlow: React.FC = () => {
                 <div className="flex justify-between text-slate-500 dark:text-slate-400 font-medium text-[11px]">
                   <span>المتبقي عند الاستلام:</span>
                   <span>{remainingAmount} جنيه</span>
+                </div>
+              </div>
+            )}
+
+            {selectedTopOption === 'cod' && (
+              <div className="mt-2 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700 space-y-1">
+                <div className="flex justify-between text-slate-500 dark:text-slate-400 font-medium text-[11px]">
+                  <span>المطلوب دفعه الآن:</span>
+                  <span>0 جنيه</span>
+                </div>
+                <div className="flex justify-between text-slate-800 dark:text-slate-200 font-bold text-[11px]">
+                  <span>المطلوب نقداً عند الاستلام:</span>
+                  <span>{totalAmount} جنيه</span>
                 </div>
               </div>
             )}
@@ -1171,10 +1445,16 @@ export const CheckoutFlow: React.FC = () => {
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>جاري تسجيل الطلب وتجهيز الدفع...</span>
                 </>
-              ) : paymentMode === 'cash_on_delivery' ? (
+              ) : selectedTopOption === 'cod' ? (
                 <>
                   <CheckCircle2 className="w-4 h-4" />
                   <span>تأكيد الطلب الآن (الدفع عند الاستلام)</span>
+                </>
+              ) : selectedTopOption === 'full_payment' ? (
+                <>
+                  <CreditCard className="w-4 h-4" />
+                  <span>متابعة لسداد كامل الطلب ({totalAmount} جنيه)</span>
+                  <ArrowLeft className="w-4 h-4" />
                 </>
               ) : (
                 <>
@@ -1199,10 +1479,14 @@ export const CheckoutFlow: React.FC = () => {
               <span>طلب رقم: #{activeOnlineOrder?.orderNumber || 'الطلب'}</span>
             </div>
             <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
-              إكمال تحويل العربون لتأكيد الطلب
+              {selectedTopOption === 'full_payment' || (activeOnlineOrder as any)?.paymentIntent === 'full_payment'
+                ? 'إكمال سداد كامل الطلب إلكترونياً'
+                : 'إكمال تحويل العربون لتأكيد الطلب'}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              طلبك تم تسجيله وحفظه بنجاح. لإتمام التأكيد وبدء التجهيز، يرجى تحويل العربون الرمزي عبر المحفظة الإلكترونية.
+              {selectedTopOption === 'full_payment' || (activeOnlineOrder as any)?.paymentIntent === 'full_payment'
+                ? 'طلبك تم تسجيله وحفظه بنجاح. لإتمام التأكيد وبدء التجهيز، يرجى تحويل كامل المبلغ عبر وسيلة الدفع المحددة.'
+                : 'طلبك تم تسجيله وحفظه بنجاح. لإتمام التأكيد وبدء التجهيز، يرجى تحويل العربون الرمزي عبر المحفظة الإلكترونية.'}
             </p>
           </div>
 
@@ -1281,7 +1565,7 @@ export const CheckoutFlow: React.FC = () => {
                 <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                   <div className="space-y-0.5">
                     <span className="font-mono text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-wider" dir="ltr">
-                      {paymentSession.accountNumber}
+                      {paymentSession.accountNumber || paymentSession.paymentDestination}
                     </span>
                     {paymentSession.accountName && (
                       <span className="block text-[11px] text-slate-500 font-medium">
@@ -1320,12 +1604,12 @@ export const CheckoutFlow: React.FC = () => {
                 </ol>
               </div>
 
-              {/* Real-time Status Indicator */}
+              {/* Real-time Status Indicator (contract: waiting or pending) */}
               <div className="pt-2">
-                {paymentSession.status === 'pending' && (
+                {(paymentSession.status === 'waiting' || paymentSession.status === 'pending') && (
                   <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 text-xs font-bold animate-pulse">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>في انتظار وصول التحويل وتأكيده لحظياً...</span>
+                    <span>في انتظار وصول التحويل وتأكيده لحظياً من السيرفر...</span>
                   </div>
                 )}
 

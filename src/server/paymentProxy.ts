@@ -108,11 +108,12 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
       return res.status(409).json({ success: false, error: 'هذا الطلب لا يحتاج جلسة دفع إلكتروني' });
     }
 
-    const expectedAmount = Number(order.depositAmount || 0);
+    const isFullPayment = req.body?.paymentIntent === 'full_payment' || (order.depositAmount >= order.totalAmount && order.totalAmount > 0);
+    const expectedAmount = isFullPayment ? Number(order.totalAmount || 0) : Number(order.depositAmount || 0);
     if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
       return res.status(409).json({
         success: false,
-        error: 'تعذر تحديد قيمة العربون المطلوبة من الطلب المسجل',
+        error: isFullPayment ? 'تعذر تحديد إجمالي الطلب المطلوب للسداد الإلكتروني' : 'تعذر تحديد قيمة العربون المطلوبة من الطلب المسجل',
       });
     }
 
@@ -122,6 +123,8 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
       customerPhone: order.customerPhone,
       provider,
       expectedAmount,
+      paymentIntent: isFullPayment ? 'full_payment' : 'deposit',
+      paymentMethodCode: req.body?.paymentMethodCode,
     });
 
     return res.status(201).json({ success: true, data: session });

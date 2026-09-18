@@ -11,6 +11,7 @@ import {
   ProductCategory,
   PaymentMode,
   PaymentMethod,
+  PaymentIntent,
   Coupon,
   DeliveryRegion,
   CreateOrderPayload,
@@ -78,6 +79,9 @@ interface StoreContextType {
     notes?: string;
     paymentMode?: PaymentMode;
     paymentMethod: PaymentMethod;
+    paymentIntent?: PaymentIntent;
+    paymentMethodCode?: string;
+    customerPaymentMethodId?: string;
     depositPaid?: number;
     depositTransactionRef?: string;
   }) => Promise<Order> | Order;
@@ -626,6 +630,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     notes?: string;
     paymentMode?: PaymentMode;
     paymentMethod: PaymentMethod;
+    paymentIntent?: PaymentIntent;
+    paymentMethodCode?: string;
+    customerPaymentMethodId?: string;
     depositPaid?: number;
     depositTransactionRef?: string;
   }): Promise<Order> => {
@@ -653,6 +660,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       paymentMode: resolvedMode,
       paymentMethod: orderData.paymentMethod,
+      paymentIntent: orderData.paymentIntent,
+      paymentMethodCode: orderData.paymentMethodCode,
+      customerPaymentMethodId: orderData.customerPaymentMethodId,
       depositTransactionRef:
         resolvedMode === 'cash_on_delivery' ? undefined : orderData.depositTransactionRef,
       couponCode: appliedCoupon?.code,
