@@ -1265,6 +1265,7 @@ export async function createServer() {
       governorate,
       city,
       district,
+      deliveryRegionId,
       address,
     } = deliveryAddress;
 
@@ -1440,7 +1441,13 @@ export async function createServer() {
       const wantedCity = normalizeText(city);
       const wantedDistrict = normalizeText(district);
 
-      let matchingRegion = adminRegions.find((region) => {
+      let matchingRegion =
+        typeof deliveryRegionId === 'string' && deliveryRegionId.trim()
+          ? adminRegions.find((region) => region.id === deliveryRegionId.trim())
+          : undefined;
+
+      if (!matchingRegion) {
+        matchingRegion = adminRegions.find((region) => {
         if (
           normalizeText(region.governorate) !== wantedGovernorate
         ) {
@@ -1456,6 +1463,7 @@ export async function createServer() {
           );
         });
       });
+      }
 
       if (!matchingRegion) {
         const governorateRegions = adminRegions.filter(
@@ -1628,6 +1636,14 @@ export async function createServer() {
           typeof err.payload.error === 'string'
             ? err.payload.error
             : 'تعذر إنشاء الطلب بالبيانات الحالية';
+
+        console.warn('[Customer Order Rejected]', {
+          status,
+          message: adminMessage,
+          paymentMode: resolvedPaymentMode,
+          paymentMethod: resolvedPaymentMethodCode,
+          deliveryRegionId: matchingRegion?.id || null,
+        });
 
         return res.status(status).json({
           success: false,
