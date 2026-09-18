@@ -9,7 +9,7 @@ import {
 
 export const paymentProxyRouter = Router();
 
-type PaymentProvider = 'vf_cash' | 'bank_alahly';
+type PaymentProvider = string;
 
 interface AdminOrderLookup {
   order: {
@@ -53,28 +53,46 @@ function normalizeEgyptianPhone(value: unknown): string {
   return digits;
 }
 
-function validProvider(value: unknown): value is PaymentProvider {
+function validLegacyProvider(value: unknown): value is PaymentProvider {
   return value === 'vf_cash' || value === 'bank_alahly';
+}
+
+function legacyProviderForMethod(methodCode: string): PaymentProvider | undefined {
+  if (methodCode === 'vodafone_cash' || methodCode === 'vf_cash') return 'vf_cash';
+  if (methodCode === 'instapay' || methodCode === 'bank_transfer' || methodCode === 'bank_alahly') return 'bank_alahly';
+  return undefined;
 }
 
 paymentProxyRouter.get('/payments/config', async (_req: Request, res: Response) => {
   try {
-    const data = await adminIntegrationGet<{
-      defaultPaymentPolicy: 'cod_allowed' | 'deposit_required';
-      sessionTimeoutSeconds: number;
-      amountTolerance: number;
-      providers: {
-        vfCashAvailable: boolean;
-        bankAlAhlyAvailable: boolean;
-      };
-    }>('/payments/config');
-
+    const data = await adminIntegrationGet<any>('/payments/config');
     return res.json({ success: true, data });
   } catch (err) {
     console.error('[Payment Proxy] Failed to load payment config:', err);
     return res.status(503).json({
       success: false,
       error: 'خدمة الدفع اللحظي غير متاحة حالياً. يرجى إعادة المحاولة.',
+    });
+  }
+});
+
+paymentProxyRouter.post('/payments/calculate-deposit', async (req: Request, res: Response) => {
+  const totalAmount = Number(req.body?.totalAmount);
+  if (!Number.isFinite(totalAmount) || totalAmount < 0) {
+    return res.status(400).json({ error: 'إجمالي الطلب غير صالح' });
+  }
+
+  try {
+    const data = await adminIntegrationPost<any>('/payments/calculate-deposit', {
+      totalAmount,
+      customerPhone: req.body?.customerPhone,
+      customerId: req.body?.customerId,
+    });
+    return res.json(data);
+  } catch (err: any) {
+    const status = Number(err?.status || 503);
+    return res.status(status >= 400 && status < 600 ? status : 503).json({
+      error: err?.payload?.error || err?.message || 'تعذر حساب العربون المطلوب',
     });
   }
 });
@@ -87,9 +105,12 @@ paymentProxyRouter.get('/payments/config', async (_req: Request, res: Response) 
 paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response) => {
   const orderId = typeof req.body?.orderId === 'string' ? req.body.orderId.trim() : '';
   const customerPhone = normalizeEgyptianPhone(req.body?.customerPhone);
-  const provider = req.body?.provider;
+  const paymentMethodCode = typeof req.body?.paymentMethodCode === 'string' ? req.body.paymentMethodCode.trim() : '';
+  const customerPaymentMethodId = typeof req.body?.customerPaymentMethodId === 'string' ? req.body.customerPaymentMethodId.trim() : '';
+  const explicitProvider = validLegacyProvider(req.body?.provider) ? req.body.provider : undefined;
+  const provider = explicitProvider || legacyProviderForMethod(paymentMethodCode);
 
-  if (!orderId || !customerPhone || !validProvider(provider)) {
+  if (!orderId || !customerPhone || (!paymentMethodCode && !customerPaymentMethodId && !provider)) {
     return res.status(400).json({ success: false, error: 'بيانات جلسة الدفع غير صالحة' });
   }
 
@@ -121,10 +142,11 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
       orderId: order.id,
       customerId: order.customerId,
       customerPhone: order.customerPhone,
-      provider,
+      ...(provider ? { provider } : {}),
       expectedAmount,
       paymentIntent: isFullPayment ? 'full_payment' : 'deposit',
-      paymentMethodCode: req.body?.paymentMethodCode,
+      paymentMethodCode: paymentMethodCode || undefined,
+      customerPaymentMethodId: customerPaymentMethodId || undefined,
     });
 
     return res.status(201).json({ success: true, data: session });
@@ -140,6 +162,8 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
         success: false,
         error: 'لا يوجد جهاز دفع متاح حالياً. حاول مرة أخرى بعد قليل أو تواصل مع خدمة العملاء.',
         code: 'no_payment_device_available',
+        orderId: payload?.orderId || orderId,
+        retryable: payload?.retryable !== false,
       });
     }
 
