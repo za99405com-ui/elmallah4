@@ -627,6 +627,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     governorate: string;
     city: string;
     district?: string;
+    deliveryRegionId?: string;
     address: string;
     notes?: string;
     paymentMode?: PaymentMode;
