@@ -539,24 +539,26 @@ export const api = {
     sessionError?: string;
   }> {
     try {
-      // Enforce the current admin3 global payment policy before durable order creation.
+      // Fail closed: payment availability is authoritative from admin3.
       const configResult = await getPaymentConfig();
-      if (configResult.success && configResult.data) {
-        if (configResult.data.defaultPaymentPolicy === 'deposit_required' && payload.paymentMode === 'cash_on_delivery') {
-          return { success: false, error: 'العربون الإلكتروني مطلوب حالياً لإتمام الطلب.' };
-        }
+      if (!configResult.success || !configResult.data) {
+        return { success: false, error: configResult.error || 'تعذر تحميل طرق الدفع المتاحة حالياً.' };
+      }
 
-        if (payload.paymentMode === 'deposit_online') {
-          if (payload.paymentMethod === 'card') {
-            return { success: false, error: 'الدفع بالبطاقة غير مفعّل في منظومة الدفع اللحظي الحالية. اختر Vodafone Cash أو البنك الأهلي.' };
-          }
-          if (payload.paymentMethod === 'vodafone_cash' && !configResult.data.providers.vfCashAvailable) {
-            return { success: false, error: 'لا يوجد جهاز Vodafone Cash متاح حالياً. اختر البنك الأهلي أو حاول بعد قليل.' };
-          }
-          if (payload.paymentMethod === 'instapay' && !configResult.data.providers.bankAlAhlyAvailable) {
-            return { success: false, error: 'لا يوجد جهاز البنك الأهلي متاح حالياً. اختر Vodafone Cash أو حاول بعد قليل.' };
-          }
-        }
+      const paymentMethodCode = payload.paymentMethodCode || payload.paymentMethod;
+      const configuredMethod = configResult.data.paymentMethods.find(
+        (method) => method.code === paymentMethodCode
+      );
+
+      if (!configuredMethod || !configuredMethod.enabled || !configuredMethod.available) {
+        return { success: false, error: 'طريقة الدفع المحددة غير متاحة حالياً. اختر طريقة أخرى.' };
+      }
+
+      if (
+        payload.paymentMode === 'cash_on_delivery' &&
+        (configResult.data.depositPolicy.required || configResult.data.defaultPaymentPolicy === 'deposit_required')
+      ) {
+        return { success: false, error: 'العربون الإلكتروني مطلوب حالياً لإتمام الطلب.' };
       }
 
       const res = await fetch(`${API_BASE}/orders`, {
@@ -569,13 +571,12 @@ export const api = {
 
       if (payload.paymentMode !== 'deposit_online') return orderResult;
 
-      const provider: PaymentSession['provider'] =
-        payload.paymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
-
       const sessionResult = await createPaymentSession({
         orderId: orderResult.data.id,
         customerPhone: payload.deliveryAddress.customerPhone,
-        provider
+        paymentMethodCode,
+        customerPaymentMethodId: payload.customerPaymentMethodId,
+        paymentIntent: payload.paymentIntent === 'full_payment' ? 'full_payment' : 'deposit'
       });
 
       // The order is already durable. Never invite a duplicate order because a
@@ -598,7 +599,9 @@ export const api = {
       return {
         ...orderResult,
         session,
-        message: 'تم تسجيل الطلب وجاري إكمال دفع العربون'
+        message: payload.paymentIntent === 'full_payment'
+          ? 'تم تسجيل الطلب وجاري إكمال سداد كامل الطلب'
+          : 'تم تسجيل الطلب وجاري إكمال دفع العربون'
       };
     } catch (e: any) {
       return { success: false, error: e.message || 'فشل إرسال الطلب' };
