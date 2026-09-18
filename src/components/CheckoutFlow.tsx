@@ -627,12 +627,11 @@ export const CheckoutFlow: React.FC = () => {
         setSessionErrorMsg(orderResult.sessionError);
         setCurrentStep('online_payment');
       } else {
-        // Fallback: create session manually
-        const provider = resolvedPaymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
+        // Fallback: create session manually using the customer-facing method.
+        // The server/admin3 resolves the internal payment source/device.
         const sessionRes = await api.createPaymentSession({
           orderId: orderResult.id,
           customerPhone: customerPhone.trim(),
-          provider,
           paymentMethodCode,
           paymentIntent
         });
@@ -677,7 +676,8 @@ export const CheckoutFlow: React.FC = () => {
       setIsContactingSupport(false);
       // Open WhatsApp with order details
       const orderNum = activeOnlineOrder?.orderNumber || paymentSession.orderId;
-      const msg = `مرحباً متجر الملاح، أود المساعدة بخصوص تحويل عربون الطلب رقم ${orderNum} بقيمة ${paymentSession.expectedAmount} ج.م`;
+      const paymentLabel = paymentSession.paymentIntent === 'full_payment' ? 'سداد كامل الطلب' : 'تحويل العربون';
+      const msg = `مرحباً متجر الملاح، أود المساعدة بخصوص ${paymentLabel} للطلب رقم ${orderNum} بقيمة ${paymentSession.expectedAmount} ج.م`;
       window.open(getWhatsAppLink(storeSettings.whatsappNumber, msg), '_blank');
     }
   };
@@ -1589,9 +1589,9 @@ export const CheckoutFlow: React.FC = () => {
                 </ol>
               </div>
 
-              {/* Real-time Status Indicator (contract: waiting or pending) */}
+              {/* Real-time Status Indicator (authoritative active status: waiting) */}
               <div className="pt-2">
-                {(paymentSession.status === 'waiting' || paymentSession.status === 'pending') && (
+                {paymentSession.status === 'waiting' && (
                   <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 text-xs font-bold animate-pulse">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>في انتظار وصول التحويل وتأكيده لحظياً من السيرفر...</span>
@@ -1609,7 +1609,7 @@ export const CheckoutFlow: React.FC = () => {
                   <div className="space-y-3 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-center">
                     <div className="flex items-center justify-center gap-2 text-rose-800 dark:text-rose-300 text-xs font-bold">
                       <AlertCircle className="w-4 h-4" />
-                      <span>انتهت مهلة الدفع (10 دقائق)</span>
+                      <span>انتهت مهلة الدفع ({Math.max(1, Math.ceil((paymentSession.timeoutSeconds ?? paymentConfig?.sessionTimeoutSeconds ?? 120) / 60))} دقيقة)</span>
                     </div>
                     <p className="text-[11px] text-rose-900 dark:text-rose-200 leading-relaxed">
                       إذا كنت قد قمت بالتحويل بالفعل، لا تقلق! اضغط بالأسفل لربط التحويل يدوياً ومراجعة طلبك فوراً مع خدمة العملاء.
