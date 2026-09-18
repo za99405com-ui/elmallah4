@@ -247,12 +247,11 @@ export const CheckoutFlow: React.FC = () => {
   const [orderNotes, setOrderNotes] = useState('');
   const [addressErrors, setAddressErrors] = useState<{ [key: string]: string }>({});
 
-  // Payment Selection State
-  // Payment Selection State (Hierarchical top-level + sub-selection)
-  type TopPaymentOption = 'cod' | 'full_payment' | 'deposit';
+  // Payment Selection State: customer sees direct top-level choices.
+  type TopPaymentOption = 'vodafone_cash_full' | 'instapay_full' | 'deposit' | 'cod';
   type OnlinePaymentMethod = 'vodafone_cash' | 'instapay';
 
-  const [selectedTopOption, setSelectedTopOption] = useState<TopPaymentOption>('deposit');
+  const [selectedTopOption, setSelectedTopOption] = useState<TopPaymentOption>('vodafone_cash_full');
   const [selectedOnlineMethod, setSelectedOnlineMethod] = useState<OnlinePaymentMethod>('vodafone_cash');
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
   const [depositCalculation, setDepositCalculation] = useState<DepositCalculation | null>(null);
@@ -285,7 +284,7 @@ export const CheckoutFlow: React.FC = () => {
   const deliveryFee = currentRegion ? currentRegion.deliveryFee : 30;
   const totalAmount = Math.max(0, cartSubtotal + deliveryFee - couponDiscount);
 
-  // Authoritative availability flags from the real admin3 checkout contract.
+  // Authoritative availability flags from admin3.
   const codMethod = useMemo(
     () => paymentConfig?.paymentMethods.find((method) => method.code === 'cash_on_delivery'),
     [paymentConfig]
@@ -301,27 +300,33 @@ export const CheckoutFlow: React.FC = () => {
 
   const isVfCashAvailable = Boolean(vfCashMethod?.enabled && vfCashMethod?.available);
   const isInstapayAvailable = Boolean(instapayMethod?.enabled && instapayMethod?.available);
-  const isFullPaymentAvailable = isVfCashAvailable || isInstapayAvailable;
+  const isOnlinePaymentAvailable = isVfCashAvailable || isInstapayAvailable;
 
+  const depositAmount = Math.max(0, Number(depositCalculation?.depositAmount || 0));
+  const isDepositMandatory = Boolean(
+    depositCalculation?.depositAmount ??
+      paymentConfig?.depositPolicy.required ??
+      paymentConfig?.defaultPaymentPolicy === 'deposit_required'
+  );
+  const isDepositAvailable = Boolean(
+    (depositCalculation?.depositEnabled ?? paymentConfig?.depositPolicy.enabled) &&
+      depositAmount > 0 &&
+      isOnlinePaymentAvailable
+  );
   const isCodAvailable = Boolean(
     codMethod?.enabled &&
-    codMethod?.available &&
-    !paymentConfig?.depositPolicy.required &&
-    paymentConfig?.defaultPaymentPolicy !== 'deposit_required'
-  );
-
-  const depositRequired = Math.max(0, Number(depositCalculation?.depositAmount || 0));
-  const isDepositAvailable = Boolean(
-    depositCalculation?.depositRequired &&
-    depositRequired > 0 &&
-    isFullPaymentAvailable
+      codMethod?.available &&
+      !isDepositMandatory
   );
 
   const remainingAmount = useMemo(() => {
     if (selectedTopOption === 'cod') return totalAmount;
-    if (selectedTopOption === 'full_payment') return 0;
-    return Math.max(0, Number(depositCalculation?.remainingAmount ?? (totalAmount - depositRequired)));
-  }, [selectedTopOption, totalAmount, depositRequired, depositCalculation]);
+    if (selectedTopOption === 'vodafone_cash_full' || selectedTopOption === 'instapay_full') return 0;
+    return Math.max(
+      0,
+      Number(depositCalculation?.remainingAmount ?? (totalAmount - depositAmount))
+    );
+  }, [selectedTopOption, totalAmount, depositAmount, depositCalculation]);
 
   // Load payment configuration from admin3. If loading fails, payment options fail closed.
   const fetchPaymentConfig = useCallback(async () => {
@@ -356,19 +361,24 @@ export const CheckoutFlow: React.FC = () => {
     };
   }, [paymentConfig, totalAmount, customerPhone]);
 
-  // Sync selectedTopOption with admin3 availability
+  // Keep selection valid as admin3 availability changes.
   useEffect(() => {
-    if (selectedTopOption === 'cod' && !isCodAvailable) {
-      if (isDepositAvailable) setSelectedTopOption('deposit');
-      else if (isFullPaymentAvailable) setSelectedTopOption('full_payment');
-    } else if (selectedTopOption === 'deposit' && !isDepositAvailable) {
-      if (isFullPaymentAvailable) setSelectedTopOption('full_payment');
-      else if (isCodAvailable) setSelectedTopOption('cod');
-    } else if (selectedTopOption === 'full_payment' && !isFullPaymentAvailable) {
-      if (isDepositAvailable) setSelectedTopOption('deposit');
-      else if (isCodAvailable) setSelectedTopOption('cod');
+    const available: TopPaymentOption[] = [];
+    if (isVfCashAvailable) available.push('vodafone_cash_full');
+    if (isInstapayAvailable) available.push('instapay_full');
+    if (isDepositAvailable) available.push('deposit');
+    if (isCodAvailable) available.push('cod');
+
+    if (!available.includes(selectedTopOption) && available.length > 0) {
+      setSelectedTopOption(available[0]);
     }
-  }, [isCodAvailable, isDepositAvailable, isFullPaymentAvailable, selectedTopOption]);
+  }, [
+    isVfCashAvailable,
+    isInstapayAvailable,
+    isDepositAvailable,
+    isCodAvailable,
+    selectedTopOption,
+  ]);
 
   // Sync selectedOnlineMethod with provider availability
   useEffect(() => {
@@ -391,7 +401,7 @@ export const CheckoutFlow: React.FC = () => {
         try {
           const isFull =
             resumedPaymentOrder.paymentIntent === 'full_payment' ||
-            (resumedPaymentOrder.depositRequired >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
+            (resumedPaymentOrder.depositAmount >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
           const sessionRes = await api.createPaymentSession({
             orderId: resumedPaymentOrder.id,
             customerPhone: resumedPaymentOrder.customerPhone,
@@ -482,7 +492,7 @@ export const CheckoutFlow: React.FC = () => {
 
       // If payment is successfully confirmed (Test Case E)
       if (updatedSession.status === 'paid') {
-        const paidAmt = Number(updatedSession.matchedAmount ?? updatedSession.expectedAmount ?? depositRequired);
+        const paidAmt = Number(updatedSession.matchedAmount ?? updatedSession.expectedAmount ?? depositAmount);
         const orderUpdated: Order = {
           ...(activeOnlineOrder || ({} as Order)),
           depositStatus: 'confirmed',
@@ -511,7 +521,7 @@ export const CheckoutFlow: React.FC = () => {
       clearInterval(countdownTimer);
       unsubscribe();
     };
-  }, [paymentSession, activeOnlineOrder, depositRequired, totalAmount, setCurrentTrackedOrder]);
+  }, [paymentSession, activeOnlineOrder, depositAmount, totalAmount, setCurrentTrackedOrder]);
 
   /* -------------------------------------------------------------------------- */
   /* Step 1: Handlers (Cart)                                                    */
@@ -1046,7 +1056,7 @@ export const CheckoutFlow: React.FC = () => {
                 </h4>
                 <p className="text-cyan-900/80 dark:text-cyan-200/80 leading-relaxed text-[11px]">
                   {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy.required
-                    ? `نظراً لأن الأسماك تُجهز وتُنظف طازجة خصيصاً لك صيد اليوم، يلزم تأكيد الطلب إلكترونياً (سواء بدفع عربون بقيمة ${depositRequired} جنيه وسداد الباقي عند الاستلام، أو سداد كامل المبلغ).`
+                    ? `نظراً لأن الأسماك تُجهز وتُنظف طازجة خصيصاً لك صيد اليوم، يلزم تأكيد الطلب إلكترونياً (سواء بدفع عربون بقيمة ${depositAmount} جنيه وسداد الباقي عند الاستلام، أو سداد كامل المبلغ).`
                     : `يمكنك اختيار الدفع نقداً عند الاستلام، أو سداد كامل المبلغ إلكترونياً، أو دفع عربون لتأكيد الطلب وتجهيزه.`}
                 </p>
               </div>
@@ -1244,17 +1254,17 @@ export const CheckoutFlow: React.FC = () => {
                         <ShieldCheck className="w-4 h-4 text-cyan-700 dark:text-cyan-400" />
                         <span>سداد عربون لتأكيد الطلب</span>
                         <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          عربون {depositRequired} ج
+                          عربون {depositAmount} ج
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                        دفع عربون رمزي ({depositRequired} جنيه) لتأكيد وتجهيز الطلب، والمتبقي نقداً عند الاستلام.
+                        دفع عربون رمزي ({depositAmount} جنيه) لتأكيد وتجهيز الطلب، والمتبقي نقداً عند الاستلام.
                       </p>
                     </div>
                   </div>
                   <div className="text-left">
                     <span className="text-xs font-black text-cyan-700 dark:text-cyan-400 block">
-                      {depositRequired} ج الآن
+                      {depositAmount} ج الآن
                     </span>
                     <span className="text-[10px] text-slate-400">
                       متبقي {remainingAmount} ج
@@ -1302,7 +1312,7 @@ export const CheckoutFlow: React.FC = () => {
                           )}
                         </div>
                         <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5 pr-5.5">
-                          تحويل {depositRequired} ج عبر محفظة فودافون كاش وتأكيد لحظي.
+                          تحويل {depositAmount} ج عبر محفظة فودافون كاش وتأكيد لحظي.
                         </p>
                       </div>
 
@@ -1339,7 +1349,7 @@ export const CheckoutFlow: React.FC = () => {
                           )}
                         </div>
                         <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5 pr-5.5">
-                          تحويل {depositRequired} ج عبر إنستاباي أو الحساب البنكي.
+                          تحويل {depositAmount} ج عبر إنستاباي أو الحساب البنكي.
                         </p>
                       </div>
                     </div>
@@ -1387,7 +1397,7 @@ export const CheckoutFlow: React.FC = () => {
               <div className="mt-2 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700 space-y-1">
                 <div className="flex justify-between text-cyan-800 dark:text-cyan-300 font-black">
                   <span>العربون المطلوب تحويله الآن:</span>
-                  <span>{depositRequired} جنيه</span>
+                  <span>{depositAmount} جنيه</span>
                 </div>
                 <div className="flex justify-between text-slate-500 dark:text-slate-400 font-medium text-[11px]">
                   <span>المتبقي عند الاستلام:</span>
@@ -1444,7 +1454,7 @@ export const CheckoutFlow: React.FC = () => {
               ) : (
                 <>
                   <CreditCard className="w-4 h-4" />
-                  <span>متابعة لدفع العربون ({depositRequired} جنيه)</span>
+                  <span>متابعة لدفع العربون ({depositAmount} جنيه)</span>
                   <ArrowLeft className="w-4 h-4" />
                 </>
               )}
