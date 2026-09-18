@@ -108,7 +108,14 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
   const paymentMethodCode = typeof req.body?.paymentMethodCode === 'string' ? req.body.paymentMethodCode.trim() : '';
   const customerPaymentMethodId = typeof req.body?.customerPaymentMethodId === 'string' ? req.body.customerPaymentMethodId.trim() : '';
   const explicitProvider = validLegacyProvider(req.body?.provider) ? req.body.provider : undefined;
-  const provider = explicitProvider || legacyProviderForMethod(paymentMethodCode);
+  // Modern flow sends the customer-facing payment method to admin3 and lets
+  // admin3 choose the internal source/device. Legacy provider mapping is used
+  // only when no customer payment method identity was supplied.
+  const provider =
+    explicitProvider ||
+    (!paymentMethodCode && !customerPaymentMethodId
+      ? legacyProviderForMethod(String(req.body?.paymentMethod || ''))
+      : undefined);
 
   if (!orderId || !customerPhone || (!paymentMethodCode && !customerPaymentMethodId && !provider)) {
     return res.status(400).json({ success: false, error: 'بيانات جلسة الدفع غير صالحة' });
@@ -169,6 +176,16 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
         success: false,
         error: 'لا يوجد جهاز دفع متاح حالياً. حاول مرة أخرى بعد قليل أو تواصل مع خدمة العملاء.',
         code: 'no_payment_device_available',
+        orderId: payload?.orderId || orderId,
+        retryable: payload?.retryable !== false,
+      });
+    }
+
+    if (status === 503 && payload?.error === 'payment_destination_missing') {
+      return res.status(503).json({
+        success: false,
+        error: payload?.message || 'طريقة الدفع متاحة لكن لم يتم ضبط رقم أو عنوان التحويل للجهاز المختار.',
+        code: 'payment_destination_missing',
         orderId: payload?.orderId || orderId,
         retryable: payload?.retryable !== false,
       });
