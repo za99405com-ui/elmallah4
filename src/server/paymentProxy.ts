@@ -181,6 +181,16 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
       });
     }
 
+    if (status === 503 && payload?.error === 'payment_destination_missing') {
+      return res.status(503).json({
+        success: false,
+        error: payload?.message || 'طريقة الدفع متاحة لكن لم يتم ضبط رقم أو عنوان التحويل للجهاز المختار.',
+        code: 'payment_destination_missing',
+        orderId: payload?.orderId || orderId,
+        retryable: payload?.retryable !== false,
+      });
+    }
+
     console.error('[Payment Proxy] Session creation failed:', err);
     return res.status(status >= 400 && status < 600 ? status : 503).json({
       success: false,
