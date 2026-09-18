@@ -185,6 +185,7 @@ export interface CreateOrderPayload {
     governorate: string;
     city: string;
     district?: string;
+    deliveryRegionId?: string;
     address: string;
   };
   paymentMode?: PaymentMode;
