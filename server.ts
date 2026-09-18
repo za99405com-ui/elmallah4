@@ -1237,6 +1237,9 @@ export async function createServer() {
       items,
       deliveryAddress,
       paymentMethod,
+      paymentIntent,
+      paymentMethodCode,
+      customerPaymentMethodId,
       depositTransactionRef,
       couponCode,
       notes,
@@ -1363,6 +1366,35 @@ export async function createServer() {
         });
       }
     }
+
+    const resolvedPaymentIntent =
+      resolvedPaymentMode === 'cash_on_delivery'
+        ? undefined
+        : paymentIntent === 'full_payment'
+          ? 'full_payment'
+          : 'deposit';
+
+    if (
+      resolvedPaymentMode === 'deposit_online' &&
+      paymentIntent !== undefined &&
+      paymentIntent !== 'full_payment' &&
+      paymentIntent !== 'deposit'
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'نوع السداد الإلكتروني غير صالح',
+      });
+    }
+
+    const resolvedPaymentMethodCode =
+      typeof paymentMethodCode === 'string' && paymentMethodCode.trim()
+        ? paymentMethodCode.trim()
+        : paymentMethod;
+
+    const resolvedCustomerPaymentMethodId =
+      typeof customerPaymentMethodId === 'string' && customerPaymentMethodId.trim()
+        ? customerPaymentMethodId.trim()
+        : undefined;
 
     const resolvedDepositMethod: PaymentMethod =
       resolvedPaymentMode === 'cash_on_delivery'
@@ -1503,6 +1535,9 @@ export async function createServer() {
             ? couponCode.trim().slice(0, 30)
             : undefined,
         paymentMode: resolvedPaymentMode,
+        paymentIntent: resolvedPaymentIntent,
+        paymentMethodCode: resolvedPaymentMethodCode,
+        customerPaymentMethodId: resolvedCustomerPaymentMethodId,
         depositMethod: resolvedDepositMethod,
         depositReference: resolvedDepositRef,
         notes:
@@ -1551,6 +1586,9 @@ export async function createServer() {
         total: Number(adminOrder.totalAmount || 0),
         paymentMode: resolvedPaymentMode,
         paymentMethod: resolvedDepositMethod,
+        paymentIntent: resolvedPaymentIntent,
+        paymentMethodCode: resolvedPaymentMethodCode,
+        customerPaymentMethodId: resolvedCustomerPaymentMethodId,
         depositRequired: Number(adminOrder.depositAmount || 0),
         depositPaid: 0,
         depositStatus:
