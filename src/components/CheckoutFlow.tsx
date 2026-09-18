@@ -1199,7 +1199,7 @@ export const CheckoutFlow: React.FC = () => {
                               className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
                             />
                             <Landmark className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي / البنك الأهلي</span>
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي</span>
                           </div>
                           {isInstapayAvailable ? (
                             <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -1326,7 +1326,7 @@ export const CheckoutFlow: React.FC = () => {
                               className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
                             />
                             <Landmark className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي / البنك الأهلي</span>
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي</span>
                           </div>
                           {isInstapayAvailable ? (
                             <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -1544,7 +1544,11 @@ export const CheckoutFlow: React.FC = () => {
               {/* Dynamic Account / Number Details from admin3 */}
               <div className="space-y-2 text-xs">
                 <span className="block font-bold text-slate-800 dark:text-slate-200">
-                  {paymentSession.provider === 'vf_cash' ? 'رقم محفظة فودافون كاش المخصص لطلبك:' : 'بيانات التحويل عبر إنستاباي / البنك الأهلي:'}
+                  {paymentSession.paymentMethodCode === 'vodafone_cash' || paymentSession.provider === 'vf_cash'
+                    ? 'رقم محفظة فودافون كاش المخصص لطلبك:'
+                    : paymentSession.paymentMethodCode === 'instapay'
+                      ? 'بيانات التحويل عبر إنستاباي:'
+                      : 'بيانات التحويل المخصصة لطلبك:'}
                 </span>
 
                 <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
