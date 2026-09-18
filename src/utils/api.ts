@@ -56,6 +56,7 @@ export interface CustomerPaymentMethodConfig {
 
 export interface PaymentConfig {
   depositPolicy: {
+    enabled: boolean;
     required: boolean;
     type: 'fixed' | 'percentage';
     value: number;
@@ -72,6 +73,7 @@ export interface PaymentConfig {
 }
 
 export interface DepositCalculation {
+  depositEnabled: boolean;
   depositRequired: boolean;
   depositType: 'fixed' | 'percentage';
   depositAmount: number;
