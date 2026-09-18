@@ -494,11 +494,9 @@ export const CheckoutFlow: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (paymentSession?.expectedPayerPhone) {
-      setPayerPhoneInput(paymentSession.expectedPayerPhone);
-      setPayerPhoneError(null);
-    }
-  }, [paymentSession?.expectedPayerPhone]);
+    setPayerPhoneInput(paymentSession?.expectedPayerPhone || '');
+    setPayerPhoneError(null);
+  }, [paymentSession?.id, paymentSession?.expectedPayerPhone]);
 
   // Save active session to sessionStorage when updated
   useEffect(() => {
@@ -1599,6 +1597,13 @@ export const CheckoutFlow: React.FC = () => {
                 </div>
               </div>
 
+              {sessionErrorMsg && (
+                <div className="flex items-start gap-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 px-3.5 py-3 text-[11px] font-bold text-rose-700 dark:text-rose-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{sessionErrorMsg}</span>
+                </div>
+              )}
+
               {/* Exact Amount To Transfer */}
               <div className="bg-cyan-50/70 dark:bg-cyan-950/40 rounded-xl p-4 text-center border border-cyan-200 dark:border-cyan-800">
                 <span className="text-xs font-bold text-cyan-900 dark:text-cyan-200 block mb-0.5">
@@ -1797,7 +1802,7 @@ export const CheckoutFlow: React.FC = () => {
                   </div>
                 )}
 
-                {(paymentSession.status === 'expired' || sessionRemainingSeconds <= 0) && paymentSession.status !== 'paid' && paymentSession.status !== 'needs_review' && (
+                {(paymentSession.status === 'expired' || sessionRemainingSeconds <= 0) && paymentSession.status !== 'paid' && paymentSession.status !== 'needs_review' && paymentSession.status !== 'cancelled' && (
                   <div className="space-y-3 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-center">
                     <div className="flex items-center justify-center gap-2 text-rose-800 dark:text-rose-300 text-xs font-bold">
                       <AlertCircle className="w-4 h-4" />
