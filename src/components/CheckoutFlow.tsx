@@ -683,6 +683,15 @@ export const CheckoutFlow: React.FC = () => {
   /* -------------------------------------------------------------------------- */
   /* Step 4: Handlers (Online Payment Completion)                               */
   /* -------------------------------------------------------------------------- */
+  const activePaymentMethodCode =
+    paymentSession?.paymentMethodCode ||
+    activeOnlineOrder?.paymentMethodCode ||
+    activeOnlineOrder?.paymentMethod ||
+    (selectedTopOption === 'instapay_full' ? 'instapay' : selectedTopOption === 'vodafone_cash_full' ? 'vodafone_cash' : selectedOnlineMethod);
+
+  const isActiveVodafone = activePaymentMethodCode === 'vodafone_cash';
+  const isActiveInstapay = activePaymentMethodCode === 'instapay';
+
   const handleCopyAccount = () => {
     const acc = paymentSession?.accountNumber || paymentSession?.paymentDestination;
     if (!acc) return;
@@ -1440,7 +1449,12 @@ export const CheckoutFlow: React.FC = () => {
                   عرض طلبي في صفحة طلباتي
                 </button>
                 <a
-                  href={getWhatsAppLink(storeSettings.whatsappNumber, `مرحباً متجر الملاح، سجلت الطلب ${activeOnlineOrder?.orderNumber} وأود تأكيده والمساعدة في سداد العربون.`)}
+                  href={getWhatsAppLink(
+                    storeSettings.whatsappNumber,
+                    `مرحباً متجر الملاح، سجلت الطلب ${activeOnlineOrder?.orderNumber} وأود المساعدة في ${
+                      activeOnlineOrder?.paymentIntent === 'full_payment' ? 'إكمال سداد الطلب بالكامل' : 'سداد العربون'
+                    }.`
+                  )}
                   target="_blank"
                   rel="noreferrer"
                   className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
@@ -1484,9 +1498,9 @@ export const CheckoutFlow: React.FC = () => {
               {/* Dynamic Account / Number Details from admin3 */}
               <div className="space-y-2 text-xs">
                 <span className="block font-bold text-slate-800 dark:text-slate-200">
-                  {paymentSession.paymentMethodCode === 'vodafone_cash' || paymentSession.provider === 'vf_cash'
+                  {isActiveVodafone
                     ? 'رقم محفظة فودافون كاش المخصص لطلبك:'
-                    : paymentSession.paymentMethodCode === 'instapay'
+                    : isActiveInstapay
                       ? 'بيانات التحويل عبر إنستاباي:'
                       : 'بيانات التحويل المخصصة لطلبك:'}
                 </span>
@@ -1494,7 +1508,7 @@ export const CheckoutFlow: React.FC = () => {
                 <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                   <div className="space-y-0.5">
                     <span className="font-mono text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-wider" dir="ltr">
-                      {paymentSession.accountNumber || paymentSession.paymentDestination}
+                      {paymentSession.accountNumber || paymentSession.paymentDestination || 'جاري تخصيص وجهة التحويل...'}
                     </span>
                     {paymentSession.accountName && (
                       <span className="block text-[11px] text-slate-500 font-medium">
@@ -1506,7 +1520,8 @@ export const CheckoutFlow: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleCopyAccount}
-                    className="px-3 py-2 bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+                    disabled={!paymentSession.accountNumber && !paymentSession.paymentDestination}
+                    className="px-3 py-2 bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isCopied ? (
                       <>
@@ -1516,7 +1531,7 @@ export const CheckoutFlow: React.FC = () => {
                     ) : (
                       <>
                         <Copy className="w-3.5 h-3.5" />
-                        <span>نسخ الرقم</span>
+                        <span>نسخ الوجهة</span>
                       </>
                     )}
                   </button>
@@ -1527,9 +1542,11 @@ export const CheckoutFlow: React.FC = () => {
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3.5 border border-slate-200 dark:border-slate-700 text-xs space-y-2">
                 <h4 className="font-bold text-slate-900 dark:text-white">خطوات السداد السريعة:</h4>
                 <ol className="list-decimal list-inside space-y-1 text-slate-600 dark:text-slate-300 text-[11px] leading-relaxed">
-                  <li>افتح تطبيق محفظتك (فودافون كاش) أو تطبيق إنستاباي.</li>
-                  <li>حوّل مبلغ <strong>{paymentSession.expectedAmount} جنيه</strong> بالضبط إلى الرقم أعلاه.</li>
-                  <li>ابق في هذه الصفحة لحظات، وسيقوم النظام بتأكيد طلبك آلياً فور رصد التحويل!</li>
+                  <li>
+                    افتح {isActiveVodafone ? 'فودافون كاش' : isActiveInstapay ? 'تطبيق إنستاباي' : 'تطبيق الدفع المحدد'}.
+                  </li>
+                  <li>حوّل مبلغ <strong>{paymentSession.expectedAmount} جنيه</strong> بالضبط إلى الوجهة أعلاه.</li>
+                  <li>ابق في هذه الصفحة لحظات، وسيتم تأكيد طلبك تلقائياً فور وصول إشعار التحويل.</li>
                 </ol>
               </div>
 
