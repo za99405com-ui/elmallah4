@@ -491,7 +491,13 @@ export const OrdersTracker: React.FC = React.memo(() => {
                           className="w-full py-2.5 px-4 bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <CreditCard className="w-4 h-4" />
-                          <span>إكمال دفع العربون لهذا الطلب ({order.depositRequired || 100} ج.م)</span>
+                          <span>
+                            {order.paymentIntent === 'full_payment'
+                              ? `إكمال سداد كامل الطلب (${order.total} ج.م)`
+                              : order.depositRequired > 0
+                                ? `إكمال دفع العربون لهذا الطلب (${order.depositRequired} ج.م)`
+                                : 'إكمال الدفع لهذا الطلب'}
+                          </span>
                         </button>
                       )}
 
