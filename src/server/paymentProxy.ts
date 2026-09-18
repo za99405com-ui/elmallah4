@@ -4,6 +4,7 @@ import {
   adminIntegrationPost,
   adminPublicGet,
   adminPublicPost,
+  adminPublicPatch,
   openAdminPaymentEventStream,
 } from './adminApi.js';
 
@@ -41,16 +42,26 @@ interface PaymentSessionResponse {
   timeoutSeconds?: number;
   matchedAmount?: number;
   amountDifference?: number;
+  payerPhone?: string;
+  expectedPayerPhone?: string;
+  payerPhoneConfirmedAt?: string;
   paidAt?: string;
 }
 
 function normalizeEgyptianPhone(value: unknown): string {
   const raw = typeof value === 'string' ? value : '';
-  let digits = raw.replace(/\D/g, '');
+  const normalized = raw
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+  let digits = normalized.replace(/\D/g, '');
   if (digits.startsWith('0020')) digits = digits.slice(4);
   else if (digits.startsWith('20') && digits.length === 12) digits = digits.slice(2);
-  if (digits.length === 10 && /^1[0125]/.test(digits)) digits = `0${digits}`;
+  if (digits.length === 10 && /^(10|11|12|15)/.test(digits)) digits = `0${digits}`;
   return digits;
+}
+
+function isValidEgyptianMobile(value: unknown): boolean {
+  return /^01[0125][0-9]{8}$/.test(normalizeEgyptianPhone(value));
 }
 
 function validLegacyProvider(value: unknown): value is PaymentProvider {
@@ -213,6 +224,52 @@ paymentProxyRouter.get('/payments/sessions/:id/status', async (req: Request, res
     return res.status(status).json({ success: false, error: err?.message || 'تعذر تحديث حالة الدفع' });
   }
 });
+
+paymentProxyRouter.patch('/payments/sessions/:id/payer-phone', async (req: Request, res: Response) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  const payerPhone = normalizeEgyptianPhone(req.body?.payerPhone);
+
+  if (!token) return res.status(401).json({ success: false, error: 'Payment session token required' });
+  if (!isValidEgyptianMobile(payerPhone)) {
+    return res.status(400).json({ success: false, error: 'يرجى إدخال رقم موبايل مصري صحيح للمحفظة التي سيتم التحويل منها' });
+  }
+
+  try {
+    const data = await adminPublicPatch<PaymentSessionResponse>(
+      `/payments/sessions/${encodeURIComponent(req.params.id)}/payer-phone?token=${encodeURIComponent(token)}`,
+      { payerPhone }
+    );
+    return res.json({ success: true, data });
+  } catch (err: any) {
+    const status = Number(err?.status || 503);
+    const payload = err?.payload as any;
+    return res.status(status >= 400 && status < 600 ? status : 503).json({
+      success: false,
+      error: payload?.error || err?.message || 'تعذر حفظ رقم المحفظة المحوّلة',
+    });
+  }
+});
+
+paymentProxyRouter.post('/payments/sessions/:id/cancel', async (req: Request, res: Response) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  if (!token) return res.status(401).json({ success: false, error: 'Payment session token required' });
+
+  try {
+    const data = await adminPublicPost<PaymentSessionResponse>(
+      `/payments/sessions/${encodeURIComponent(req.params.id)}/client-cancel?token=${encodeURIComponent(token)}`,
+      { reason: 'customer_cancelled' }
+    );
+    return res.json({ success: true, data });
+  } catch (err: any) {
+    const status = Number(err?.status || 503);
+    const payload = err?.payload as any;
+    return res.status(status >= 400 && status < 600 ? status : 503).json({
+      success: false,
+      error: payload?.error || err?.message || 'تعذر إلغاء عملية الدفع',
+    });
+  }
+});
+
 
 paymentProxyRouter.post('/payments/sessions/:id/contact-support', async (req: Request, res: Response) => {
   const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';

@@ -193,8 +193,13 @@ export async function createServer() {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-  // Load fresh data directly from Supabase tables on startup
-  await syncServerDataWithSupabase();
+  // Local server can warm its fallback cache at startup. Vercel serverless
+  // functions fetch authoritative admin data per route and should not load the
+  // entire storefront dataset before every request.
+  if (!process.env.VERCEL) {
+    await syncServerDataWithSupabase();
+    lastServerDataSyncTime = Date.now();
+  }
 
   // Request logger for API routes (No sensitive bodies, tokens, or keys logged)
   app.use('/api', (req, res, next) => {
@@ -1227,9 +1232,21 @@ export async function createServer() {
   }
 
   app.post('/api/orders', async (req, res) => {
-    await ensureFreshServerData();
+    let orderSettings = settings;
+    if (process.env.ADMIN_API_BASE_URL) {
+      try {
+        orderSettings = { ...settings, ...(await fetchAdminSettings()) };
+      } catch (settingsError) {
+        console.warn('[Admin API] Failed to load order settings, using fallback cache:', settingsError);
+        await ensureFreshServerData();
+        orderSettings = settings;
+      }
+    } else {
+      await ensureFreshServerData();
+      orderSettings = settings;
+    }
 
-    if (settings && settings.isStoreOpen === false) {
+    if (orderSettings && orderSettings.isStoreOpen === false) {
       return res.status(400).json({
         success: false,
         error: 'المتجر مغلق حالياً لاستقبال الطلبات، يرجى المحاولة أثناء ساعات العمل.',

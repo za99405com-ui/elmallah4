@@ -40,6 +40,8 @@ export interface PaymentSession {
   matchedAmount?: number;
   amountDifference?: number;
   payerPhone?: string;
+  expectedPayerPhone?: string;
+  payerPhoneConfirmedAt?: string;
   paidAt?: string;
 }
 
@@ -312,16 +314,61 @@ export function subscribeToPaymentSession(
     // If EventSource fails, polling fallback handles it
   }
 
-  // Poll fallback every 2.5s for fast status responsiveness
+  // SSE is primary; use a lighter polling fallback to keep mobile/server load low.
   pollTimer = window.setInterval(async () => {
     if (!active) return;
     const status = await getPaymentSessionStatus(current);
     if (status && active) {
       accept(status);
     }
-  }, 2500);
+  }, 6000);
 
   return cleanup;
+}
+
+async function setPaymentPayerPhone(
+  session: PaymentSession,
+  payerPhone: string
+): Promise<{ success: boolean; data?: PaymentSession; error?: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/payments/sessions/${encodeURIComponent(session.id)}/payer-phone`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: session.clientToken, payerPhone })
+      }
+    );
+    const payload = await parseJson<{ success: boolean; data?: PaymentSession; error?: string }>(res);
+    if (payload.success && payload.data) {
+      return { success: true, data: { ...session, ...payload.data } };
+    }
+    return { success: false, error: payload.error || 'تعذر حفظ رقم المحفظة المحوّلة' };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'تعذر حفظ رقم المحفظة المحوّلة' };
+  }
+}
+
+async function cancelPaymentSession(
+  session: PaymentSession
+): Promise<{ success: boolean; data?: PaymentSession; error?: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/payments/sessions/${encodeURIComponent(session.id)}/cancel`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: session.clientToken })
+      }
+    );
+    const payload = await parseJson<{ success: boolean; data?: PaymentSession; error?: string }>(res);
+    if (payload.success && payload.data) {
+      return { success: true, data: { ...session, ...payload.data } };
+    }
+    return { success: false, error: payload.error || 'تعذر إلغاء عملية الدفع' };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'تعذر إلغاء عملية الدفع' };
+  }
 }
 
 export async function contactPaymentSupport(session: PaymentSession): Promise<{ success: boolean; data?: PaymentSession; error?: string }> {
@@ -342,7 +389,9 @@ export {
   calculateDeposit,
   createPaymentSession,
   getPaymentSessionStatus,
-  waitForPaymentSession
+  waitForPaymentSession,
+  setPaymentPayerPhone,
+  cancelPaymentSession
 };
 
 export const api = {
@@ -498,6 +547,22 @@ export const api = {
 
   async getPaymentSessionStatus(session: PaymentSession) {
     return getPaymentSessionStatus(session);
+  },
+
+  async setPaymentPayerPhone(session: PaymentSession, payerPhone: string) {
+    const result = await setPaymentPayerPhone(session, payerPhone);
+    if (result.success && result.data) {
+      dispatchPaymentEvent('almallah:payment-session-updated', result.data);
+    }
+    return result;
+  },
+
+  async cancelPaymentSession(session: PaymentSession) {
+    const result = await cancelPaymentSession(session);
+    if (result.success && result.data) {
+      dispatchPaymentEvent('almallah:payment-session-updated', result.data);
+    }
+    return result;
   },
 
   async contactPaymentSupport(session: PaymentSession) {

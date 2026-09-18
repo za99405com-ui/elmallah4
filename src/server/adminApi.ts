@@ -94,6 +94,17 @@ export function adminPublicPost<T>(path: string, body: unknown): Promise<T> {
   );
 }
 
+export function adminPublicPatch<T>(path: string, body: unknown): Promise<T> {
+  return requestAdmin<T>(
+    path,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+    false
+  );
+}
+
 export function adminIntegrationGet<T>(path: string): Promise<T> {
   return requestAdmin<T>(path, { method: 'GET' }, true);
 }
