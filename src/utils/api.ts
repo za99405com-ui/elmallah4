@@ -22,12 +22,18 @@ export interface PaymentSession {
   id: string;
   clientToken: string;
   orderId: string;
-  provider: 'vf_cash' | 'bank_alahly';
+  provider: string;
+  paymentSourceId?: string;
+  customerPaymentMethodId?: string;
+  paymentMethodCode?: string;
+  paymentIntent?: 'full_payment' | 'deposit';
   expectedAmount: number;
   amountTolerance: number;
   currency: string;
   deviceId?: string;
   paymentDestination?: string;
+  accountNumber?: string;
+  accountName?: string;
   status: PaymentSessionStatus;
   expiresAt: string;
   timeoutSeconds?: number;
@@ -37,14 +43,40 @@ export interface PaymentSession {
   paidAt?: string;
 }
 
+export interface CustomerPaymentMethodConfig {
+  id: string;
+  code: string;
+  name: string;
+  enabled: boolean;
+  available: boolean;
+  channel: string;
+  instructions?: string;
+  sortOrder: number;
+}
+
 export interface PaymentConfig {
+  depositPolicy: {
+    required: boolean;
+    type: 'fixed' | 'percentage';
+    value: number;
+    minimumDeposit: number;
+  };
+  paymentMethods: CustomerPaymentMethodConfig[];
   defaultPaymentPolicy: 'cod_allowed' | 'deposit_required';
   sessionTimeoutSeconds: number;
   amountTolerance: number;
-  providers: {
+  providers?: {
     vfCashAvailable: boolean;
     bankAlAhlyAvailable: boolean;
   };
+}
+
+export interface DepositCalculation {
+  depositRequired: boolean;
+  depositType: 'fixed' | 'percentage';
+  depositAmount: number;
+  remainingAmount: number;
+  totalAmount: number;
 }
 
 const dispatchPaymentEvent = (name: string, detail: unknown) => {
@@ -90,17 +122,40 @@ async function parseJson<T>(res: Response): Promise<T> {
 async function getPaymentConfig(): Promise<{ success: boolean; data?: PaymentConfig; error?: string }> {
   try {
     const res = await fetch(`${API_BASE}/payments/config`, { cache: 'no-store' });
-    return await parseJson(res);
+    const payload = await parseJson<{ success: boolean; data?: PaymentConfig; error?: string }>(res);
+    if (!res.ok) return { success: false, error: payload.error || 'تعذر تحميل إعدادات الدفع' };
+    return payload;
   } catch (e: any) {
     return { success: false, error: e?.message || 'تعذر تحميل إعدادات الدفع' };
+  }
+}
+
+async function calculateDeposit(
+  totalAmount: number,
+  customerPhone?: string
+): Promise<{ success: boolean; data?: DepositCalculation; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/payments/calculate-deposit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ totalAmount, customerPhone })
+    });
+    const payload = await parseJson<DepositCalculation & { error?: string }>(res);
+    if (!res.ok) return { success: false, error: payload.error || 'تعذر حساب العربون' };
+    return { success: true, data: payload };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'تعذر حساب العربون' };
   }
 }
 
 async function createPaymentSession(input: {
   orderId: string;
   customerPhone: string;
-  provider: PaymentSession['provider'];
-}): Promise<{ success: boolean; data?: PaymentSession; error?: string; code?: string }> {
+  paymentMethodCode?: string;
+  customerPaymentMethodId?: string;
+  paymentIntent: 'full_payment' | 'deposit';
+  provider?: string;
+}): Promise<{ success: boolean; data?: PaymentSession; error?: string; code?: string; orderId?: string; retryable?: boolean }> {
   try {
     const res = await fetch(`${API_BASE}/payments/sessions`, {
       method: 'POST',
@@ -282,6 +337,7 @@ export async function contactPaymentSupport(session: PaymentSession): Promise<{ 
 
 export {
   getPaymentConfig,
+  calculateDeposit,
   createPaymentSession,
   getPaymentSessionStatus,
   waitForPaymentSession
@@ -423,7 +479,18 @@ export const api = {
     return getPaymentConfig();
   },
 
-  async createPaymentSession(input: { orderId: string; customerPhone: string; provider: PaymentSession['provider'] }) {
+  async calculateDeposit(totalAmount: number, customerPhone?: string) {
+    return calculateDeposit(totalAmount, customerPhone);
+  },
+
+  async createPaymentSession(input: {
+    orderId: string;
+    customerPhone: string;
+    paymentMethodCode?: string;
+    customerPaymentMethodId?: string;
+    paymentIntent: 'full_payment' | 'deposit';
+    provider?: string;
+  }) {
     return createPaymentSession(input);
   },
 
