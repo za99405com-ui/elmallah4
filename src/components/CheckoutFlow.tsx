@@ -25,7 +25,8 @@ import {
   Landmark,
   FileText,
   User,
-  Phone
+  Phone,
+  XCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useStore } from '../context/StoreContext';
@@ -297,6 +298,10 @@ export const CheckoutFlow: React.FC = () => {
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [isContactingSupport, setIsContactingSupport] = useState(false);
+  const [payerPhoneInput, setPayerPhoneInput] = useState('');
+  const [payerPhoneError, setPayerPhoneError] = useState<string | null>(null);
+  const [isSavingPayerPhone, setIsSavingPayerPhone] = useState(false);
+  const [isCancellingPayment, setIsCancellingPayment] = useState(false);
 
   // Confirmed Order for Final Step
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
@@ -487,6 +492,13 @@ export const CheckoutFlow: React.FC = () => {
       // Ignore
     }
   }, []);
+
+  useEffect(() => {
+    if (paymentSession?.expectedPayerPhone) {
+      setPayerPhoneInput(paymentSession.expectedPayerPhone);
+      setPayerPhoneError(null);
+    }
+  }, [paymentSession?.expectedPayerPhone]);
 
   // Save active session to sessionStorage when updated
   useEffect(() => {
@@ -728,6 +740,8 @@ export const CheckoutFlow: React.FC = () => {
 
   const isActiveVodafone = activePaymentMethodCode === 'vodafone_cash';
   const isActiveInstapay = activePaymentMethodCode === 'instapay';
+  const isPayerPhoneConfirmed =
+    !isActiveVodafone || Boolean(paymentSession?.expectedPayerPhone);
 
   const handleCopyAccount = () => {
     const acc = paymentSession?.accountNumber || paymentSession?.paymentDestination;
@@ -735,6 +749,52 @@ export const CheckoutFlow: React.FC = () => {
     navigator.clipboard.writeText(acc);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  const handleSavePayerPhone = async () => {
+    if (!paymentSession || paymentSession.status !== 'waiting') return;
+
+    const normalized = normalizeEgyptianMobileInput(payerPhoneInput);
+    if (!isValidEgyptianMobileInput(normalized)) {
+      setPayerPhoneError('اكتب رقم محفظة فودافون كاش مصري صحيح مثل 01012345678');
+      return;
+    }
+
+    setIsSavingPayerPhone(true);
+    setPayerPhoneError(null);
+    try {
+      const result = await api.setPaymentPayerPhone(paymentSession, normalized);
+      if (!result.success || !result.data) {
+        setPayerPhoneError(result.error || 'تعذر حفظ رقم المحفظة المحوّلة');
+        return;
+      }
+      setPaymentSession(result.data);
+      setPayerPhoneInput(result.data.expectedPayerPhone || normalized);
+    } finally {
+      setIsSavingPayerPhone(false);
+    }
+  };
+
+  const handleCancelPaymentSession = async () => {
+    if (!paymentSession || paymentSession.status !== 'waiting' || isCancellingPayment) return;
+    if (!window.confirm('إلغاء عملية الدفع الحالية؟ الطلب سيظل محفوظاً ويمكنك إكمال دفعه لاحقاً من طلباتي.')) {
+      return;
+    }
+
+    setIsCancellingPayment(true);
+    setSessionErrorMsg(null);
+    try {
+      const result = await api.cancelPaymentSession(paymentSession);
+      if (!result.success || !result.data) {
+        setSessionErrorMsg(result.error || 'تعذر إلغاء عملية الدفع');
+        return;
+      }
+
+      setPaymentSession(result.data);
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    } finally {
+      setIsCancellingPayment(false);
+    }
   };
 
   const handleContactSupportAfterExpiry = async () => {
@@ -1552,7 +1612,80 @@ export const CheckoutFlow: React.FC = () => {
                 </span>
               </div>
 
+              {isActiveVodafone && paymentSession.status === 'waiting' && (
+                <div className={`rounded-xl p-4 border space-y-3 ${
+                  paymentSession.expectedPayerPhone
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800'
+                }`}>
+                  <div className="flex items-start gap-2.5">
+                    <Phone className={`w-4 h-4 shrink-0 mt-0.5 ${
+                      paymentSession.expectedPayerPhone ? 'text-emerald-600' : 'text-amber-600'
+                    }`} />
+                    <div className="flex-1">
+                      <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                        رقم فودافون كاش الذي ستحوّل منه
+                      </h4>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed">
+                        اكتب رقم المحفظة التي ستقوم بالتحويل منها. سنستخدم هذا الرقم مع المبلغ والوقت لمطابقة التحويل بطلبك.
+                      </p>
+                    </div>
+                    {paymentSession.expectedPayerPhone && (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      dir="ltr"
+                      value={payerPhoneInput}
+                      onChange={(e) => {
+                        setPayerPhoneInput(e.target.value);
+                        setPayerPhoneError(null);
+                      }}
+                      onBlur={() => {
+                        const normalized = normalizeEgyptianMobileInput(payerPhoneInput);
+                        if (normalized) setPayerPhoneInput(normalized);
+                      }}
+                      placeholder="01012345678"
+                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-mono font-bold text-sm focus:outline-hidden focus:ring-2 focus:ring-cyan-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleSavePayerPhone()}
+                      disabled={isSavingPayerPhone || !payerPhoneInput.trim()}
+                      className="px-4 py-2.5 bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isSavingPayerPhone ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : paymentSession.expectedPayerPhone ? (
+                        <Check className="w-4 h-4" />
+                      ) : (
+                        <ShieldCheck className="w-4 h-4" />
+                      )}
+                      <span>{paymentSession.expectedPayerPhone ? 'تحديث الرقم' : 'تأكيد الرقم'}</span>
+                    </button>
+                  </div>
+
+                  {payerPhoneError && (
+                    <p className="text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                      {payerPhoneError}
+                    </p>
+                  )}
+
+                  {!paymentSession.expectedPayerPhone && (
+                    <p className="text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                      بعد تأكيد الرقم ستظهر لك محفظة الاستقبال وخطوات التحويل.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Dynamic Account / Number Details from admin3 */}
+              {isPayerPhoneConfirmed && (
+                <>
               <div className="space-y-2 text-xs">
                 <span className="block font-bold text-slate-800 dark:text-slate-200">
                   {isActiveVodafone
@@ -1607,6 +1740,10 @@ export const CheckoutFlow: React.FC = () => {
                 </ol>
               </div>
 
+
+                </>
+              )}
+
               {/* Real-time Status Indicator (authoritative active status: waiting) */}
               <div className="pt-2">
                 {paymentSession.status === 'waiting' && (
@@ -1616,10 +1753,47 @@ export const CheckoutFlow: React.FC = () => {
                   </div>
                 )}
 
+                {paymentSession.status === 'waiting' && (
+                  <div className="mt-3 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelPaymentSession()}
+                      disabled={isCancellingPayment}
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/70 text-rose-700 dark:text-rose-300 bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-950/50 text-xs font-bold disabled:opacity-50"
+                    >
+                      {isCancellingPayment ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <XCircle className="w-4 h-4" />
+                      )}
+                      <span>إلغاء عملية الدفع</span>
+                    </button>
+                  </div>
+                )}
+
                 {paymentSession.status === 'paid' && (
                   <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-black">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                     <span>تم استلام التحويل وتأكيد الطلب بنجاح! جارِ التوجيه...</span>
+                  </div>
+                )}
+
+                {paymentSession.status === 'cancelled' && (
+                  <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-center">
+                    <div className="flex items-center justify-center gap-2 text-slate-800 dark:text-slate-200 text-xs font-bold">
+                      <XCircle className="w-5 h-5 text-slate-500" />
+                      <span>تم إلغاء عملية الدفع الحالية</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      الطلب نفسه ما زال محفوظاً. يمكنك فتحه من «طلباتي» وإنشاء جلسة دفع جديدة لاحقاً.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('orders')}
+                      className="py-2.5 px-4 bg-slate-900 dark:bg-white text-white dark:text-slate-950 text-xs font-bold rounded-xl"
+                    >
+                      الذهاب إلى طلباتي
+                    </button>
                   </div>
                 )}
 
