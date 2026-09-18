@@ -107,17 +107,29 @@ const otpIpRateLimits = new Map<string, { count: number; resetAt: number }>();
 // Helper: Normalize Egyptian Phone Numbers (010, 011, 012, 015)
 export function normalizeEgyptianPhone(input: string): string {
   if (!input) return '';
-  let digits = input.replace(/\D/g, '');
+
+  const normalized = input
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+
+  let digits = normalized.replace(/\D/g, '');
+
   if (digits.startsWith('0020')) {
     digits = digits.substring(4);
-  } else if (digits.startsWith('002')) {
-    digits = digits.substring(3);
   } else if (digits.startsWith('20') && digits.length === 12) {
     digits = digits.substring(2);
   }
-  if (digits.length === 10 && (digits.startsWith('10') || digits.startsWith('11') || digits.startsWith('12') || digits.startsWith('15'))) {
+
+  if (
+    digits.length === 10 &&
+    (digits.startsWith('10') ||
+      digits.startsWith('11') ||
+      digits.startsWith('12') ||
+      digits.startsWith('15'))
+  ) {
     digits = '0' + digits;
   }
+
   return digits;
 }
 

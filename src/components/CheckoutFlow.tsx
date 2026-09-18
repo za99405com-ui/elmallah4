@@ -44,6 +44,38 @@ type CheckoutStep = 'cart' | 'address' | 'payment' | 'online_payment' | 'confirm
 
 const SESSION_STORAGE_KEY = 'almallah_checkout_payment_session';
 
+function normalizeEgyptianMobileInput(input: string): string {
+  if (!input) return '';
+
+  let normalized = input
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+
+  let digits = normalized.replace(/\D/g, '');
+
+  if (digits.startsWith('0020')) {
+    digits = digits.slice(4);
+  } else if (digits.startsWith('20') && digits.length === 12) {
+    digits = digits.slice(2);
+  }
+
+  if (
+    digits.length === 10 &&
+    (digits.startsWith('10') ||
+      digits.startsWith('11') ||
+      digits.startsWith('12') ||
+      digits.startsWith('15'))
+  ) {
+    digits = `0${digits}`;
+  }
+
+  return digits;
+}
+
+function isValidEgyptianMobileInput(input: string): boolean {
+  return /^01[0125][0-9]{8}$/.test(normalizeEgyptianMobileInput(input));
+}
+
 function formatCountdown(seconds: number): string {
   const safe = Math.max(0, seconds);
   const minutes = Math.floor(safe / 60).toString().padStart(2, '0');
@@ -355,7 +387,8 @@ export const CheckoutFlow: React.FC = () => {
       return () => { active = false; };
     }
 
-    void api.calculateDeposit(totalAmount, customerPhone.trim() || undefined).then((result) => {
+    const normalizedPhone = normalizeEgyptianMobileInput(customerPhone);
+    void api.calculateDeposit(totalAmount, normalizedPhone || undefined).then((result) => {
       if (!active) return;
       setDepositCalculation(result.success && result.data ? result.data : null);
     });
@@ -564,8 +597,7 @@ export const CheckoutFlow: React.FC = () => {
       errors.name = 'يرجى إدخال اسم المستلم بشكل صحيح';
     }
 
-    const cleanPhone = customerPhone.replace(/\D/g, '');
-    if (!cleanPhone || cleanPhone.length < 10) {
+    if (!isValidEgyptianMobileInput(customerPhone)) {
       errors.phone = 'يرجى إدخال رقم هاتف مصري صحيح (مثال: 01012345678)';
     }
 
@@ -618,7 +650,7 @@ export const CheckoutFlow: React.FC = () => {
 
       const orderResult = await createOrder({
         customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
+        customerPhone: normalizeEgyptianMobileInput(customerPhone),
         governorate,
         city,
         deliveryRegionId: selectedRegionId || undefined,
@@ -662,7 +694,7 @@ export const CheckoutFlow: React.FC = () => {
         // The server/admin3 resolves the internal payment source/device.
         const sessionRes = await api.createPaymentSession({
           orderId: orderResult.id,
-          customerPhone: customerPhone.trim(),
+          customerPhone: normalizeEgyptianMobileInput(customerPhone),
           paymentMethodCode,
           customerPaymentMethodId: selectedMethodConfig?.id,
           paymentIntent
@@ -943,10 +975,20 @@ export const CheckoutFlow: React.FC = () => {
               <div className="relative">
                 <input
                   type="tel"
+                  inputMode="tel"
                   dir="ltr"
                   placeholder="01012345678"
                   value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value);
+                    if (addressErrors.phone) {
+                      setAddressErrors((current) => ({ ...current, phone: '' }));
+                    }
+                  }}
+                  onBlur={() => {
+                    const normalized = normalizeEgyptianMobileInput(customerPhone);
+                    if (normalized) setCustomerPhone(normalized);
+                  }}
                   className="w-full pl-3 pr-9 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-medium text-right focus:outline-hidden focus:ring-2 focus:ring-cyan-500"
                 />
                 <Phone className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
