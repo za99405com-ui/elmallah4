@@ -75,6 +75,7 @@ interface StoreContextType {
     governorate: string;
     city: string;
     district?: string;
+    deliveryRegionId?: string;
     address: string;
     notes?: string;
     paymentMode?: PaymentMode;
@@ -656,6 +657,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         governorate: orderData.governorate,
         city: orderData.city,
         district: orderData.district,
+        deliveryRegionId: orderData.deliveryRegionId,
         address: orderData.address
       },
       paymentMode: resolvedMode,
