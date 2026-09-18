@@ -22,12 +22,18 @@ export interface PaymentSession {
   id: string;
   clientToken: string;
   orderId: string;
-  provider: 'vf_cash' | 'bank_alahly';
+  provider: string;
+  paymentSourceId?: string;
+  customerPaymentMethodId?: string;
+  paymentMethodCode?: string;
+  paymentIntent?: 'full_payment' | 'deposit';
   expectedAmount: number;
   amountTolerance: number;
   currency: string;
   deviceId?: string;
   paymentDestination?: string;
+  accountNumber?: string;
+  accountName?: string;
   status: PaymentSessionStatus;
   expiresAt: string;
   timeoutSeconds?: number;
@@ -37,14 +43,40 @@ export interface PaymentSession {
   paidAt?: string;
 }
 
+export interface CustomerPaymentMethodConfig {
+  id: string;
+  code: string;
+  name: string;
+  enabled: boolean;
+  available: boolean;
+  channel: string;
+  instructions?: string;
+  sortOrder: number;
+}
+
 export interface PaymentConfig {
+  depositPolicy: {
+    required: boolean;
+    type: 'fixed' | 'percentage';
+    value: number;
+    minimumDeposit: number;
+  };
+  paymentMethods: CustomerPaymentMethodConfig[];
   defaultPaymentPolicy: 'cod_allowed' | 'deposit_required';
   sessionTimeoutSeconds: number;
   amountTolerance: number;
-  providers: {
+  providers?: {
     vfCashAvailable: boolean;
     bankAlAhlyAvailable: boolean;
   };
+}
+
+export interface DepositCalculation {
+  depositRequired: boolean;
+  depositType: 'fixed' | 'percentage';
+  depositAmount: number;
+  remainingAmount: number;
+  totalAmount: number;
 }
 
 const dispatchPaymentEvent = (name: string, detail: unknown) => {
@@ -90,17 +122,40 @@ async function parseJson<T>(res: Response): Promise<T> {
 async function getPaymentConfig(): Promise<{ success: boolean; data?: PaymentConfig; error?: string }> {
   try {
     const res = await fetch(`${API_BASE}/payments/config`, { cache: 'no-store' });
-    return await parseJson(res);
+    const payload = await parseJson<{ success: boolean; data?: PaymentConfig; error?: string }>(res);
+    if (!res.ok) return { success: false, error: payload.error || 'تعذر تحميل إعدادات الدفع' };
+    return payload;
   } catch (e: any) {
     return { success: false, error: e?.message || 'تعذر تحميل إعدادات الدفع' };
+  }
+}
+
+async function calculateDeposit(
+  totalAmount: number,
+  customerPhone?: string
+): Promise<{ success: boolean; data?: DepositCalculation; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/payments/calculate-deposit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ totalAmount, customerPhone })
+    });
+    const payload = await parseJson<DepositCalculation & { error?: string }>(res);
+    if (!res.ok) return { success: false, error: payload.error || 'تعذر حساب العربون' };
+    return { success: true, data: payload };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'تعذر حساب العربون' };
   }
 }
 
 async function createPaymentSession(input: {
   orderId: string;
   customerPhone: string;
-  provider: PaymentSession['provider'];
-}): Promise<{ success: boolean; data?: PaymentSession; error?: string; code?: string }> {
+  paymentMethodCode?: string;
+  customerPaymentMethodId?: string;
+  paymentIntent: 'full_payment' | 'deposit';
+  provider?: string;
+}): Promise<{ success: boolean; data?: PaymentSession; error?: string; code?: string; orderId?: string; retryable?: boolean }> {
   try {
     const res = await fetch(`${API_BASE}/payments/sessions`, {
       method: 'POST',
@@ -282,6 +337,7 @@ export async function contactPaymentSupport(session: PaymentSession): Promise<{ 
 
 export {
   getPaymentConfig,
+  calculateDeposit,
   createPaymentSession,
   getPaymentSessionStatus,
   waitForPaymentSession
@@ -423,7 +479,18 @@ export const api = {
     return getPaymentConfig();
   },
 
-  async createPaymentSession(input: { orderId: string; customerPhone: string; provider: PaymentSession['provider'] }) {
+  async calculateDeposit(totalAmount: number, customerPhone?: string) {
+    return calculateDeposit(totalAmount, customerPhone);
+  },
+
+  async createPaymentSession(input: {
+    orderId: string;
+    customerPhone: string;
+    paymentMethodCode?: string;
+    customerPaymentMethodId?: string;
+    paymentIntent: 'full_payment' | 'deposit';
+    provider?: string;
+  }) {
     return createPaymentSession(input);
   },
 
@@ -472,24 +539,26 @@ export const api = {
     sessionError?: string;
   }> {
     try {
-      // Enforce the current admin3 global payment policy before durable order creation.
+      // Fail closed: payment availability is authoritative from admin3.
       const configResult = await getPaymentConfig();
-      if (configResult.success && configResult.data) {
-        if (configResult.data.defaultPaymentPolicy === 'deposit_required' && payload.paymentMode === 'cash_on_delivery') {
-          return { success: false, error: 'العربون الإلكتروني مطلوب حالياً لإتمام الطلب.' };
-        }
+      if (!configResult.success || !configResult.data) {
+        return { success: false, error: configResult.error || 'تعذر تحميل طرق الدفع المتاحة حالياً.' };
+      }
 
-        if (payload.paymentMode === 'deposit_online') {
-          if (payload.paymentMethod === 'card') {
-            return { success: false, error: 'الدفع بالبطاقة غير مفعّل في منظومة الدفع اللحظي الحالية. اختر Vodafone Cash أو البنك الأهلي.' };
-          }
-          if (payload.paymentMethod === 'vodafone_cash' && !configResult.data.providers.vfCashAvailable) {
-            return { success: false, error: 'لا يوجد جهاز Vodafone Cash متاح حالياً. اختر البنك الأهلي أو حاول بعد قليل.' };
-          }
-          if (payload.paymentMethod === 'instapay' && !configResult.data.providers.bankAlAhlyAvailable) {
-            return { success: false, error: 'لا يوجد جهاز البنك الأهلي متاح حالياً. اختر Vodafone Cash أو حاول بعد قليل.' };
-          }
-        }
+      const paymentMethodCode = payload.paymentMethodCode || payload.paymentMethod;
+      const configuredMethod = configResult.data.paymentMethods.find(
+        (method) => method.code === paymentMethodCode
+      );
+
+      if (!configuredMethod || !configuredMethod.enabled || !configuredMethod.available) {
+        return { success: false, error: 'طريقة الدفع المحددة غير متاحة حالياً. اختر طريقة أخرى.' };
+      }
+
+      if (
+        payload.paymentMode === 'cash_on_delivery' &&
+        (configResult.data.depositPolicy.required || configResult.data.defaultPaymentPolicy === 'deposit_required')
+      ) {
+        return { success: false, error: 'العربون الإلكتروني مطلوب حالياً لإتمام الطلب.' };
       }
 
       const res = await fetch(`${API_BASE}/orders`, {
@@ -502,13 +571,12 @@ export const api = {
 
       if (payload.paymentMode !== 'deposit_online') return orderResult;
 
-      const provider: PaymentSession['provider'] =
-        payload.paymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
-
       const sessionResult = await createPaymentSession({
         orderId: orderResult.data.id,
         customerPhone: payload.deliveryAddress.customerPhone,
-        provider
+        paymentMethodCode,
+        customerPaymentMethodId: payload.customerPaymentMethodId,
+        paymentIntent: payload.paymentIntent === 'full_payment' ? 'full_payment' : 'deposit'
       });
 
       // The order is already durable. Never invite a duplicate order because a
@@ -531,7 +599,9 @@ export const api = {
       return {
         ...orderResult,
         session,
-        message: 'تم تسجيل الطلب وجاري إكمال دفع العربون'
+        message: payload.paymentIntent === 'full_payment'
+          ? 'تم تسجيل الطلب وجاري إكمال سداد كامل الطلب'
+          : 'تم تسجيل الطلب وجاري إكمال دفع العربون'
       };
     } catch (e: any) {
       return { success: false, error: e.message || 'فشل إرسال الطلب' };

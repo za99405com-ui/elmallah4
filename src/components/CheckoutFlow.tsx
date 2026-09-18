@@ -33,7 +33,8 @@ import { Order, PaymentMode, PaymentMethod, CartItem, DeliveryRegion, getPayment
 import { 
   api, 
   PaymentConfig, 
-  PaymentSession, 
+  PaymentSession,
+  DepositCalculation, 
   subscribeToPaymentSession, 
   contactPaymentSupport 
 } from '../utils/api';
@@ -253,9 +254,8 @@ export const CheckoutFlow: React.FC = () => {
 
   const [selectedTopOption, setSelectedTopOption] = useState<TopPaymentOption>('deposit');
   const [selectedOnlineMethod, setSelectedOnlineMethod] = useState<OnlinePaymentMethod>('vodafone_cash');
-  const [paymentMode, setPaymentMode] = useState<PaymentMode>('deposit_online');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('vodafone_cash');
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
+  const [depositCalculation, setDepositCalculation] = useState<DepositCalculation | null>(null);
   const [isLoadingPaymentConfig, setIsLoadingPaymentConfig] = useState(false);
 
   // Active Online Payment Session & Order State
@@ -285,84 +285,76 @@ export const CheckoutFlow: React.FC = () => {
   const deliveryFee = currentRegion ? currentRegion.deliveryFee : 30;
   const totalAmount = Math.max(0, cartSubtotal + deliveryFee - couponDiscount);
 
-  // Authoritative availability flags derived strictly from admin3
-  const isCodAvailable = useMemo(() => {
-    if (!paymentConfig) return true;
-    if (paymentConfig.defaultPaymentPolicy === 'deposit_required') return false;
-    if (paymentConfig.depositPolicy === 'mandatory') return false;
-    if (paymentConfig.codEnabled === false) return false;
-    return true;
-  }, [paymentConfig]);
+  // Authoritative availability flags from the real admin3 checkout contract.
+  const codMethod = useMemo(
+    () => paymentConfig?.paymentMethods.find((method) => method.code === 'cash_on_delivery'),
+    [paymentConfig]
+  );
+  const vfCashMethod = useMemo(
+    () => paymentConfig?.paymentMethods.find((method) => method.code === 'vodafone_cash'),
+    [paymentConfig]
+  );
+  const instapayMethod = useMemo(
+    () => paymentConfig?.paymentMethods.find((method) => method.code === 'instapay'),
+    [paymentConfig]
+  );
 
-  const isDepositAvailable = useMemo(() => {
-    if (!paymentConfig) return true;
-    if (paymentConfig.depositEnabled === false) return false;
-    if (paymentConfig.depositPolicy === 'disabled') return false;
-    if (paymentConfig.providers && !paymentConfig.providers.vfCashAvailable && !paymentConfig.providers.bankAlAhlyAvailable) {
-      return false;
-    }
-    return true;
-  }, [paymentConfig]);
+  const isVfCashAvailable = Boolean(vfCashMethod?.enabled && vfCashMethod?.available);
+  const isInstapayAvailable = Boolean(instapayMethod?.enabled && instapayMethod?.available);
+  const isFullPaymentAvailable = isVfCashAvailable || isInstapayAvailable;
 
-  const isFullPaymentAvailable = useMemo(() => {
-    if (!paymentConfig) return true;
-    if (paymentConfig.providers && !paymentConfig.providers.vfCashAvailable && !paymentConfig.providers.bankAlAhlyAvailable) {
-      return false;
-    }
-    return true;
-  }, [paymentConfig]);
+  const isCodAvailable = Boolean(
+    codMethod?.enabled &&
+    codMethod?.available &&
+    !paymentConfig?.depositPolicy.required &&
+    paymentConfig?.defaultPaymentPolicy !== 'deposit_required'
+  );
 
-  const isVfCashAvailable = useMemo(() => {
-    if (!paymentConfig) return true;
-    if (paymentConfig.customerPaymentMethods && paymentConfig.customerPaymentMethods.length > 0) {
-      const m = paymentConfig.customerPaymentMethods.find(x => x.code === 'vodafone_cash' || x.code === 'vf_cash');
-      if (m) return m.enabled;
-    }
-    return Boolean(paymentConfig.providers?.vfCashAvailable !== false);
-  }, [paymentConfig]);
-
-  const isInstapayAvailable = useMemo(() => {
-    if (!paymentConfig) return true;
-    if (paymentConfig.customerPaymentMethods && paymentConfig.customerPaymentMethods.length > 0) {
-      const m = paymentConfig.customerPaymentMethods.find(x => x.code === 'instapay' || x.code === 'bank_alahly');
-      if (m) return m.enabled;
-    }
-    return Boolean(paymentConfig.providers?.bankAlAhlyAvailable !== false);
-  }, [paymentConfig]);
-
-  // Effective authoritative deposit requirement from admin3
-  const depositRequired = useMemo(() => {
-    if (paymentConfig?.depositAmount != null) {
-      return Math.min(Number(paymentConfig.depositAmount), totalAmount);
-    }
-    if (paymentConfig?.defaultDepositAmount != null) {
-      return Math.min(Number(paymentConfig.defaultDepositAmount), totalAmount);
-    }
-    return Math.min(100, totalAmount);
-  }, [paymentConfig, totalAmount]);
+  const depositRequired = Math.max(0, Number(depositCalculation?.depositAmount || 0));
+  const isDepositAvailable = Boolean(
+    depositCalculation?.depositRequired &&
+    depositRequired > 0 &&
+    isFullPaymentAvailable
+  );
 
   const remainingAmount = useMemo(() => {
     if (selectedTopOption === 'cod') return totalAmount;
     if (selectedTopOption === 'full_payment') return 0;
-    return Math.max(0, totalAmount - depositRequired);
-  }, [selectedTopOption, totalAmount, depositRequired]);
+    return Math.max(0, Number(depositCalculation?.remainingAmount ?? (totalAmount - depositRequired)));
+  }, [selectedTopOption, totalAmount, depositRequired, depositCalculation]);
 
-  // Load payment configuration from admin3
+  // Load payment configuration from admin3. If loading fails, payment options fail closed.
   const fetchPaymentConfig = useCallback(async () => {
     setIsLoadingPaymentConfig(true);
     try {
-      const res = await api.getPaymentConfig(totalAmount);
-      if (res.success && res.data) {
-        setPaymentConfig(res.data);
-      }
+      const res = await api.getPaymentConfig();
+      setPaymentConfig(res.success && res.data ? res.data : null);
     } finally {
       setIsLoadingPaymentConfig(false);
     }
-  }, [totalAmount]);
+  }, []);
 
   useEffect(() => {
     fetchPaymentConfig();
   }, [fetchPaymentConfig]);
+
+  // Deposit amount is calculated by admin3, never by the browser.
+  useEffect(() => {
+    let active = true;
+    if (!paymentConfig || totalAmount <= 0) {
+      setDepositCalculation(null);
+      return () => { active = false; };
+    }
+
+    void api.calculateDeposit(totalAmount, customerPhone.trim() || undefined).then((result) => {
+      if (!active) return;
+      setDepositCalculation(result.success && result.data ? result.data : null);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [paymentConfig, totalAmount, customerPhone]);
 
   // Sync selectedTopOption with admin3 availability
   useEffect(() => {
@@ -371,6 +363,9 @@ export const CheckoutFlow: React.FC = () => {
       else if (isFullPaymentAvailable) setSelectedTopOption('full_payment');
     } else if (selectedTopOption === 'deposit' && !isDepositAvailable) {
       if (isFullPaymentAvailable) setSelectedTopOption('full_payment');
+      else if (isCodAvailable) setSelectedTopOption('cod');
+    } else if (selectedTopOption === 'full_payment' && !isFullPaymentAvailable) {
+      if (isDepositAvailable) setSelectedTopOption('deposit');
       else if (isCodAvailable) setSelectedTopOption('cod');
     }
   }, [isCodAvailable, isDepositAvailable, isFullPaymentAvailable, selectedTopOption]);
@@ -384,17 +379,6 @@ export const CheckoutFlow: React.FC = () => {
     }
   }, [isVfCashAvailable, isInstapayAvailable, selectedOnlineMethod]);
 
-  // Keep paymentMode and paymentMethod state synchronized for compatibility
-  useEffect(() => {
-    if (selectedTopOption === 'cod') {
-      setPaymentMode('cash_on_delivery');
-      setPaymentMethod('cash_on_delivery');
-    } else {
-      setPaymentMode('deposit_online');
-      setPaymentMethod(selectedOnlineMethod);
-    }
-  }, [selectedTopOption, selectedOnlineMethod]);
-
   // Check for resumed payment from OrdersTracker (Test Case J)
   useEffect(() => {
     if (resumedPaymentOrder) {
@@ -405,13 +389,14 @@ export const CheckoutFlow: React.FC = () => {
       const initResumedSession = async () => {
         setIsSubmittingOrder(true);
         try {
-          const provider = resumedPaymentOrder.paymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
-          const isFull = (resumedPaymentOrder as any).paymentIntent === 'full_payment' || (resumedPaymentOrder.depositRequired >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
+          const isFull =
+            resumedPaymentOrder.paymentIntent === 'full_payment' ||
+            (resumedPaymentOrder.depositRequired >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
           const sessionRes = await api.createPaymentSession({
             orderId: resumedPaymentOrder.id,
             customerPhone: resumedPaymentOrder.customerPhone,
-            provider,
-            paymentMethodCode: (resumedPaymentOrder as any).paymentMethodCode || resumedPaymentOrder.paymentMethod,
+            paymentMethodCode: resumedPaymentOrder.paymentMethodCode || resumedPaymentOrder.paymentMethod,
+            customerPaymentMethodId: resumedPaymentOrder.customerPaymentMethodId,
             paymentIntent: isFull ? 'full_payment' : 'deposit'
           });
 
@@ -433,7 +418,7 @@ export const CheckoutFlow: React.FC = () => {
     }
   }, [resumedPaymentOrder, setResumedPaymentOrder]);
 
-  // Check for stored active session on browser refresh (Contract status: waiting or legacy pending)
+  // Check for stored active session on browser refresh (authoritative active status: waiting)
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
@@ -441,7 +426,7 @@ export const CheckoutFlow: React.FC = () => {
         const parsed = JSON.parse(saved);
         if (parsed?.order && parsed?.session) {
           const expiresAtMs = new Date(parsed.session.expiresAt).getTime();
-          const isActive = parsed.session.status === 'waiting' || parsed.session.status === 'pending';
+          const isActive = parsed.session.status === 'waiting';
           if (expiresAtMs > Date.now() && isActive) {
             setActiveOnlineOrder(parsed.order);
             setPaymentSession(parsed.session);
@@ -458,7 +443,7 @@ export const CheckoutFlow: React.FC = () => {
 
   // Save active session to sessionStorage when updated
   useEffect(() => {
-    const isSessionActive = paymentSession && (paymentSession.status === 'waiting' || paymentSession.status === 'pending');
+    const isSessionActive = paymentSession && paymentSession.status === 'waiting';
     if (activeOnlineOrder && isSessionActive) {
       try {
         sessionStorage.setItem(
@@ -468,7 +453,7 @@ export const CheckoutFlow: React.FC = () => {
       } catch {
         // Ignore
       }
-    } else if (paymentSession && paymentSession.status !== 'waiting' && paymentSession.status !== 'pending') {
+    } else if (paymentSession && paymentSession.status !== 'waiting') {
       sessionStorage.removeItem(SESSION_STORAGE_KEY);
     }
   }, [activeOnlineOrder, paymentSession]);
@@ -642,12 +627,11 @@ export const CheckoutFlow: React.FC = () => {
         setSessionErrorMsg(orderResult.sessionError);
         setCurrentStep('online_payment');
       } else {
-        // Fallback: create session manually
-        const provider = resolvedPaymentMethod === 'vodafone_cash' ? 'vf_cash' : 'bank_alahly';
+        // Fallback: create session manually using the customer-facing method.
+        // The server/admin3 resolves the internal payment source/device.
         const sessionRes = await api.createPaymentSession({
           orderId: orderResult.id,
           customerPhone: customerPhone.trim(),
-          provider,
           paymentMethodCode,
           paymentIntent
         });
@@ -692,7 +676,8 @@ export const CheckoutFlow: React.FC = () => {
       setIsContactingSupport(false);
       // Open WhatsApp with order details
       const orderNum = activeOnlineOrder?.orderNumber || paymentSession.orderId;
-      const msg = `مرحباً متجر الملاح، أود المساعدة بخصوص تحويل عربون الطلب رقم ${orderNum} بقيمة ${paymentSession.expectedAmount} ج.م`;
+      const paymentLabel = paymentSession.paymentIntent === 'full_payment' ? 'سداد كامل الطلب' : 'تحويل العربون';
+      const msg = `مرحباً متجر الملاح، أود المساعدة بخصوص ${paymentLabel} للطلب رقم ${orderNum} بقيمة ${paymentSession.expectedAmount} ج.م`;
       window.open(getWhatsAppLink(storeSettings.whatsappNumber, msg), '_blank');
     }
   };
@@ -1055,12 +1040,12 @@ export const CheckoutFlow: React.FC = () => {
               <ShieldCheck className="w-5 h-5 text-cyan-700 dark:text-cyan-400 shrink-0 mt-0.5" />
               <div className="space-y-1 text-xs">
                 <h4 className="font-bold text-cyan-950 dark:text-cyan-100">
-                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy === 'mandatory'
+                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy.required
                     ? 'يلزم سداد عربون أو الدفع إلكترونياً لتأكيد الطلب'
                     : 'خيارات الدفع المتاحة لطلبك'}
                 </h4>
                 <p className="text-cyan-900/80 dark:text-cyan-200/80 leading-relaxed text-[11px]">
-                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy === 'mandatory'
+                  {paymentConfig?.defaultPaymentPolicy === 'deposit_required' || paymentConfig?.depositPolicy.required
                     ? `نظراً لأن الأسماك تُجهز وتُنظف طازجة خصيصاً لك صيد اليوم، يلزم تأكيد الطلب إلكترونياً (سواء بدفع عربون بقيمة ${depositRequired} جنيه وسداد الباقي عند الاستلام، أو سداد كامل المبلغ).`
                     : `يمكنك اختيار الدفع نقداً عند الاستلام، أو سداد كامل المبلغ إلكترونياً، أو دفع عربون لتأكيد الطلب وتجهيزه.`}
                 </p>
@@ -1214,7 +1199,7 @@ export const CheckoutFlow: React.FC = () => {
                               className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
                             />
                             <Landmark className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي / البنك الأهلي</span>
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي</span>
                           </div>
                           {isInstapayAvailable ? (
                             <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -1341,7 +1326,7 @@ export const CheckoutFlow: React.FC = () => {
                               className="w-3.5 h-3.5 text-cyan-700 focus:ring-cyan-500"
                             />
                             <Landmark className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي / البنك الأهلي</span>
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">إنستاباي</span>
                           </div>
                           {isInstapayAvailable ? (
                             <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -1559,7 +1544,11 @@ export const CheckoutFlow: React.FC = () => {
               {/* Dynamic Account / Number Details from admin3 */}
               <div className="space-y-2 text-xs">
                 <span className="block font-bold text-slate-800 dark:text-slate-200">
-                  {paymentSession.provider === 'vf_cash' ? 'رقم محفظة فودافون كاش المخصص لطلبك:' : 'بيانات التحويل عبر إنستاباي / البنك الأهلي:'}
+                  {paymentSession.paymentMethodCode === 'vodafone_cash' || paymentSession.provider === 'vf_cash'
+                    ? 'رقم محفظة فودافون كاش المخصص لطلبك:'
+                    : paymentSession.paymentMethodCode === 'instapay'
+                      ? 'بيانات التحويل عبر إنستاباي:'
+                      : 'بيانات التحويل المخصصة لطلبك:'}
                 </span>
 
                 <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
@@ -1604,9 +1593,9 @@ export const CheckoutFlow: React.FC = () => {
                 </ol>
               </div>
 
-              {/* Real-time Status Indicator (contract: waiting or pending) */}
+              {/* Real-time Status Indicator (authoritative active status: waiting) */}
               <div className="pt-2">
-                {(paymentSession.status === 'waiting' || paymentSession.status === 'pending') && (
+                {paymentSession.status === 'waiting' && (
                   <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 text-xs font-bold animate-pulse">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>في انتظار وصول التحويل وتأكيده لحظياً من السيرفر...</span>
@@ -1624,7 +1613,7 @@ export const CheckoutFlow: React.FC = () => {
                   <div className="space-y-3 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-center">
                     <div className="flex items-center justify-center gap-2 text-rose-800 dark:text-rose-300 text-xs font-bold">
                       <AlertCircle className="w-4 h-4" />
-                      <span>انتهت مهلة الدفع (10 دقائق)</span>
+                      <span>انتهت مهلة الدفع ({Math.max(1, Math.ceil((paymentSession.timeoutSeconds ?? paymentConfig?.sessionTimeoutSeconds ?? 120) / 60))} دقيقة)</span>
                     </div>
                     <p className="text-[11px] text-rose-900 dark:text-rose-200 leading-relaxed">
                       إذا كنت قد قمت بالتحويل بالفعل، لا تقلق! اضغط بالأسفل لربط التحويل يدوياً ومراجعة طلبك فوراً مع خدمة العملاء.

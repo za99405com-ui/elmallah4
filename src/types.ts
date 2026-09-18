@@ -76,8 +76,12 @@ export type OrderStatus =
   | 'cancelled';   // 🔴 تم الإلغاء
 
 export type PaymentMode = 
-  | 'deposit_online'    // دفع عربون أونلاين وتأكيد الحجز
+  | 'deposit_online'    // دفع إلكتروني (عربون أو سداد كامل) مع جلسة دفع
   | 'cash_on_delivery'; // الدفع بالكامل نقداً عند الاستلام
+
+export type PaymentIntent =
+  | 'full_payment'
+  | 'deposit';
 
 export type PaymentMethod = 
   | 'cash_on_delivery'  // الدفع عند الاستلام
@@ -149,6 +153,9 @@ export interface Order {
   // Deposit & Payment Information
   paymentMode?: PaymentMode;
   paymentMethod: PaymentMethod;
+  paymentIntent?: PaymentIntent;
+  paymentMethodCode?: string;
+  customerPaymentMethodId?: string;
   rawPaymentMethod?: string;      // القيمة الأصلية لطريقة الدفع من السجل التاريخي إن وجدت
   depositRequired: number;        // قيمة العربون المطلوب
   depositPaid: number;            // قيمة العربون المدفوع/المحول
@@ -182,6 +189,9 @@ export interface CreateOrderPayload {
   };
   paymentMode?: PaymentMode;
   paymentMethod: PaymentMethod;
+  paymentIntent?: PaymentIntent;
+  paymentMethodCode?: string;
+  customerPaymentMethodId?: string;
   depositPaid?: number;
   depositTransactionRef?: string;
   couponCode?: string;
