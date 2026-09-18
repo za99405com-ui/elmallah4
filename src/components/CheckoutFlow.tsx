@@ -621,6 +621,7 @@ export const CheckoutFlow: React.FC = () => {
         customerPhone: customerPhone.trim(),
         governorate,
         city,
+        deliveryRegionId: selectedRegionId || undefined,
         address: address.trim(),
         notes: orderNotes.trim() || undefined,
         paymentMode: resolvedPaymentMode,
@@ -635,6 +636,7 @@ export const CheckoutFlow: React.FC = () => {
         setConfirmedOrder(orderResult);
         setCurrentTrackedOrder(orderResult);
         setCurrentStep('confirmation');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
         try {
           confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
         } catch {
@@ -649,10 +651,12 @@ export const CheckoutFlow: React.FC = () => {
       if (orderResult.activeSession) {
         setPaymentSession(orderResult.activeSession);
         setCurrentStep('online_payment');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       } else if (orderResult.sessionError) {
         // Case D: No payment device available
         setSessionErrorMsg(orderResult.sessionError);
         setCurrentStep('online_payment');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       } else {
         // Fallback: create session manually using the customer-facing method.
         // The server/admin3 resolves the internal payment source/device.
@@ -667,16 +671,17 @@ export const CheckoutFlow: React.FC = () => {
         if (sessionRes.success && sessionRes.data) {
           setPaymentSession(sessionRes.data);
           setCurrentStep('online_payment');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
         } else {
           setSessionErrorMsg(sessionRes.error || 'تم تسجيل طلبك بنجاح، لكن لا يوجد جهاز دفع متاح حالياً.');
           setCurrentStep('online_payment');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
         }
       }
     } catch (err: any) {
       setSessionErrorMsg(err?.message || 'تعذر إنشاء الطلب. يرجى مراجعة البيانات والمحاولة مجدداً.');
     } finally {
       setIsSubmittingOrder(false);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -1358,6 +1363,16 @@ export const CheckoutFlow: React.FC = () => {
               </div>
             )}
           </div>
+
+          {sessionErrorMsg && (
+            <div className="flex items-start gap-2 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-3.5 py-3 text-xs text-red-700 dark:text-red-300">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="leading-relaxed">
+                <span className="font-bold block mb-0.5">تعذر متابعة الطلب</span>
+                <span>{sessionErrorMsg}</span>
+              </div>
+            </div>
+          )}
 
           {/* Submission Buttons */}
           <div className="flex gap-3 pt-2">
