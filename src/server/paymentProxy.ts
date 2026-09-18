@@ -125,11 +125,18 @@ paymentProxyRouter.post('/payments/sessions', async (req: Request, res: Response
     if (!order || normalizeEgyptianPhone(order.customerPhone) !== customerPhone) {
       return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
     }
-    if (order.paymentMode === 'cash_on_delivery' || order.depositStatus === 'not_required') {
+    const isFullPayment =
+      req.body?.paymentIntent === 'full_payment' ||
+      (order.depositAmount >= order.totalAmount && order.totalAmount > 0);
+
+    if (order.paymentMode === 'cash_on_delivery') {
       return res.status(409).json({ success: false, error: 'هذا الطلب لا يحتاج جلسة دفع إلكتروني' });
     }
 
-    const isFullPayment = req.body?.paymentIntent === 'full_payment' || (order.depositAmount >= order.totalAmount && order.totalAmount > 0);
+    if (!isFullPayment && order.depositStatus === 'not_required') {
+      return res.status(409).json({ success: false, error: 'هذا الطلب لا يحتاج جلسة عربون إلكتروني' });
+    }
+
     const expectedAmount = isFullPayment ? Number(order.totalAmount || 0) : Number(order.depositAmount || 0);
     if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
       return res.status(409).json({
