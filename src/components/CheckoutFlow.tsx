@@ -975,10 +975,20 @@ export const CheckoutFlow: React.FC = () => {
               <div className="relative">
                 <input
                   type="tel"
+                  inputMode="tel"
                   dir="ltr"
                   placeholder="01012345678"
                   value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value);
+                    if (addressErrors.phone) {
+                      setAddressErrors((current) => ({ ...current, phone: '' }));
+                    }
+                  }}
+                  onBlur={() => {
+                    const normalized = normalizeEgyptianMobileInput(customerPhone);
+                    if (normalized) setCustomerPhone(normalized);
+                  }}
                   className="w-full pl-3 pr-9 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-medium text-right focus:outline-hidden focus:ring-2 focus:ring-cyan-500"
                 />
                 <Phone className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
