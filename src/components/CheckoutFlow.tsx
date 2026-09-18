@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   ShoppingCart, 
   Trash2, 
@@ -300,7 +300,9 @@ export const CheckoutFlow: React.FC = () => {
   const [isContactingSupport, setIsContactingSupport] = useState(false);
   const [payerPhoneInput, setPayerPhoneInput] = useState('');
   const [payerPhoneError, setPayerPhoneError] = useState<string | null>(null);
+  const [payerPhoneSuccess, setPayerPhoneSuccess] = useState<string | null>(null);
   const [isSavingPayerPhone, setIsSavingPayerPhone] = useState(false);
+  const transferDetailsRef = useRef<HTMLDivElement | null>(null);
   const [isCancellingPayment, setIsCancellingPayment] = useState(false);
 
   // Confirmed Order for Final Step
@@ -496,7 +498,8 @@ export const CheckoutFlow: React.FC = () => {
   useEffect(() => {
     setPayerPhoneInput(paymentSession?.expectedPayerPhone || '');
     setPayerPhoneError(null);
-  }, [paymentSession?.id, paymentSession?.expectedPayerPhone]);
+    setPayerPhoneSuccess(null);
+  }, [paymentSession?.id]);
 
   // Save active session to sessionStorage when updated
   useEffect(() => {
@@ -740,6 +743,9 @@ export const CheckoutFlow: React.FC = () => {
   const isActiveInstapay = activePaymentMethodCode === 'instapay';
   const isPayerPhoneConfirmed =
     !isActiveVodafone || Boolean(paymentSession?.expectedPayerPhone);
+  const isConfirmedPayerPhoneUnchanged =
+    Boolean(paymentSession?.expectedPayerPhone) &&
+    normalizeEgyptianMobileInput(payerPhoneInput) === paymentSession?.expectedPayerPhone;
 
   const handleCopyAccount = () => {
     const acc = paymentSession?.accountNumber || paymentSession?.paymentDestination;
@@ -760,14 +766,27 @@ export const CheckoutFlow: React.FC = () => {
 
     setIsSavingPayerPhone(true);
     setPayerPhoneError(null);
+    setPayerPhoneSuccess(null);
     try {
       const result = await api.setPaymentPayerPhone(paymentSession, normalized);
       if (!result.success || !result.data) {
         setPayerPhoneError(result.error || 'تعذر حفظ رقم المحفظة المحوّلة');
         return;
       }
-      setPaymentSession(result.data);
-      setPayerPhoneInput(result.data.expectedPayerPhone || normalized);
+
+      const confirmedSession: PaymentSession = {
+        ...paymentSession,
+        ...result.data,
+        expectedPayerPhone: result.data.expectedPayerPhone || normalized
+      };
+
+      setPaymentSession(confirmedSession);
+      setPayerPhoneInput(confirmedSession.expectedPayerPhone || normalized);
+      setPayerPhoneSuccess('تم تأكيد رقم التحويل بنجاح. استخدم بيانات المحفظة بالأسفل لإتمام الدفع.');
+
+      window.setTimeout(() => {
+        transferDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 120);
     } finally {
       setIsSavingPayerPhone(false);
     }
@@ -1649,6 +1668,7 @@ export const CheckoutFlow: React.FC = () => {
                       onChange={(e) => {
                         setPayerPhoneInput(e.target.value);
                         setPayerPhoneError(null);
+                        setPayerPhoneSuccess(null);
                       }}
                       onBlur={() => {
                         const normalized = normalizeEgyptianMobileInput(payerPhoneInput);
@@ -1660,17 +1680,31 @@ export const CheckoutFlow: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => void handleSavePayerPhone()}
-                      disabled={isSavingPayerPhone || !payerPhoneInput.trim()}
-                      className="px-4 py-2.5 bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+                      disabled={isSavingPayerPhone || !payerPhoneInput.trim() || isConfirmedPayerPhoneUnchanged}
+                      className={`px-4 py-2.5 text-white text-xs font-bold rounded-xl disabled:opacity-100 flex items-center justify-center gap-2 transition-colors ${
+                        isConfirmedPayerPhoneUnchanged
+                          ? 'bg-emerald-600 cursor-default'
+                          : 'bg-cyan-700 hover:bg-cyan-800 disabled:opacity-50'
+                      }`}
                     >
                       {isSavingPayerPhone ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmedPayerPhoneUnchanged ? (
+                        <CheckCircle2 className="w-4 h-4" />
                       ) : paymentSession.expectedPayerPhone ? (
-                        <Check className="w-4 h-4" />
+                        <ShieldCheck className="w-4 h-4" />
                       ) : (
                         <ShieldCheck className="w-4 h-4" />
                       )}
-                      <span>{paymentSession.expectedPayerPhone ? 'تحديث الرقم' : 'تأكيد الرقم'}</span>
+                      <span>
+                        {isSavingPayerPhone
+                          ? 'جاري التأكيد...'
+                          : isConfirmedPayerPhoneUnchanged
+                            ? 'تم تأكيد الرقم'
+                            : paymentSession.expectedPayerPhone
+                              ? 'تحديث الرقم'
+                              : 'تأكيد الرقم'}
+                      </span>
                     </button>
                   </div>
 
@@ -1678,6 +1712,13 @@ export const CheckoutFlow: React.FC = () => {
                     <p className="text-[11px] font-bold text-rose-600 dark:text-rose-400">
                       {payerPhoneError}
                     </p>
+                  )}
+
+                  {payerPhoneSuccess && (
+                    <div className="flex items-start gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-2.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
+                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>{payerPhoneSuccess}</span>
+                    </div>
                   )}
 
                   {!paymentSession.expectedPayerPhone && (
@@ -1691,7 +1732,7 @@ export const CheckoutFlow: React.FC = () => {
               {/* Dynamic Account / Number Details from admin3 */}
               {isPayerPhoneConfirmed && (
                 <>
-              <div className="space-y-2 text-xs">
+              <div ref={transferDetailsRef} className="space-y-2 text-xs scroll-mt-24">
                 <span className="block font-bold text-slate-800 dark:text-slate-200">
                   {isActiveVodafone
                     ? 'رقم محفظة فودافون كاش المخصص لطلبك:'
