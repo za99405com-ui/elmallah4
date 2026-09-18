@@ -2,17 +2,30 @@ import express from 'express';
 import { paymentProxyRouter } from './src/server/paymentProxy.js';
 
 /**
- * Phase 2 composition root.
+ * Lightweight payment composition root.
  *
- * The legacy customer server is intentionally left intact. We compose the
- * payment-session proxy in front of it so `/api/payments/*` is handled before
- * Vite/static SPA fallbacks while every existing route keeps its behavior.
+ * Vercel has explicit /api/payments/* functions, so those functions must not
+ * initialize the full storefront server (catalog, coupons, regions, settings)
+ * on every cold start. Local development can still fall back to the full app.
  */
 export async function createPaymentServer() {
-  const previousVercel = process.env.VERCEL;
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-  // Importing server.ts normally auto-starts outside Vercel. Suppress that one
-  // side effect while we obtain its Express app and let this wrapper own listen().
+  // Payment routes are fully self-contained and talk server-to-server to admin3.
+  app.use('/api', paymentProxyRouter);
+
+  // On Vercel this app is used only by explicit payment serverless functions.
+  // Returning here avoids loading the complete storefront on every payment call.
+  if (process.env.VERCEL) {
+    return app;
+  }
+
+  // Local development keeps the old fallback composition so one process can
+  // still serve the whole storefront.
+  const previousVercel = process.env.VERCEL;
   process.env.VERCEL = '1';
   const { createServer: createBaseServer } = await import('./server.js');
   const baseApp = await createBaseServer();
@@ -23,18 +36,7 @@ export async function createPaymentServer() {
     process.env.VERCEL = previousVercel;
   }
 
-  const app = express();
-  app.set('trust proxy', 1);
-  app.use(express.json({ limit: '2mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
-
-  // Payment proxy first; base app remains the fallback for all pre-existing APIs
-  // and the SPA/static pipeline.
-  app.use('/api', paymentProxyRouter);
-
-  // The old checkout component still renders the legacy store-settings fields.
-  // Mask only those two customer-facing values so no static payment number is
-  // shown before admin3 assigns a device/session-specific destination.
+  // Mask legacy static payment values when the local full app handles settings.
   app.use('/api/settings', (_req, res, next) => {
     const originalJson = res.json.bind(res);
     res.json = ((body: any) => {
@@ -54,7 +56,6 @@ export async function createPaymentServer() {
   });
 
   app.use(baseApp);
-
   return app;
 }
 
