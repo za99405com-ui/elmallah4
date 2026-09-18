@@ -1642,7 +1642,10 @@ export async function createServer() {
           message: adminMessage,
           paymentMode: resolvedPaymentMode,
           paymentMethod: resolvedPaymentMethodCode,
-          deliveryRegionId: matchingRegion?.id || null,
+          deliveryRegionId:
+            typeof deliveryRegionId === 'string' && deliveryRegionId.trim()
+              ? deliveryRegionId.trim()
+              : null,
         });
 
         return res.status(status).json({
