@@ -556,13 +556,6 @@ export const api = {
         return { success: false, error: 'طريقة الدفع المحددة غير متاحة حالياً. اختر طريقة أخرى.' };
       }
 
-      if (
-        payload.paymentMode === 'cash_on_delivery' &&
-        (configResult.data.depositPolicy.required || configResult.data.defaultPaymentPolicy === 'deposit_required')
-      ) {
-        return { success: false, error: 'العربون الإلكتروني مطلوب حالياً لإتمام الطلب.' };
-      }
-
       const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: getCustomerAuthHeaders(),
