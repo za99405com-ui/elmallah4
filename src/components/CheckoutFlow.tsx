@@ -560,8 +560,8 @@ export const CheckoutFlow: React.FC = () => {
   const validateAddressForm = (): boolean => {
     const errors: { [key: string]: string } = {};
 
-    if (!customerName.trim()) {
-      errors.name = 'يرجى إدخال اسم المستلم';
+    if (customerName.trim().length < 2) {
+      errors.name = 'يرجى إدخال اسم المستلم بشكل صحيح';
     }
 
     const cleanPhone = customerPhone.replace(/\D/g, '');
@@ -569,7 +569,7 @@ export const CheckoutFlow: React.FC = () => {
       errors.phone = 'يرجى إدخال رقم هاتف مصري صحيح (مثال: 01012345678)';
     }
 
-    if (!address.trim()) {
+    if (address.trim().length < 5) {
       errors.address = 'يرجى إدخال العنوان بالتفصيل (اسم الشارع، رقم العمارة والشقة)';
     }
 
