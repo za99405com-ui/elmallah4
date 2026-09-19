@@ -689,6 +689,18 @@ export const api = {
     }
   },
 
+  async cancelOrder(id: string): Promise<{ success: boolean; data?: Order; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: getCustomerAuthHeaders()
+      });
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || 'تعذر إلغاء الطلب' };
+    }
+  },
+
   async askAiAssistant(question: string, fishType?: string, occasion?: string) {
     try {
       const res = await fetch(`${API_BASE}/ai/assistant`, {
