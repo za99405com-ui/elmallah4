@@ -28,7 +28,6 @@ import {
   Phone,
   XCircle
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 import { useStore } from '../context/StoreContext';
 import { Order, PaymentMode, PaymentMethod, CartItem, DeliveryRegion, getPaymentMethodLabel } from '../types';
 import { 
@@ -583,7 +582,8 @@ export const CheckoutFlow: React.FC = () => {
           paymentState: 'paid',
           depositPaid: paidAmt,
           remainingAmount: Math.max(0, (activeOnlineOrder?.total || totalAmount) - paidAmt),
-          activeSession: null
+          activeSession: null,
+          status: 'preparing'
         };
         setConfirmedOrder(orderUpdated);
         setCurrentTrackedOrder(orderUpdated);
@@ -591,16 +591,6 @@ export const CheckoutFlow: React.FC = () => {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
         void refreshOrders();
 
-        // Confetti celebration
-        try {
-          confetti({
-            particleCount: 80,
-            spread: 70,
-            origin: { y: 0.6 }
-          });
-        } catch {
-          // Ignore
-        }
       }
     });
 
@@ -719,11 +709,6 @@ export const CheckoutFlow: React.FC = () => {
         setCurrentTrackedOrder(orderResult);
         setCurrentStep('confirmation');
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        try {
-          confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
-        } catch {
-          // Ignore
-        }
         return;
       }
 
@@ -1945,24 +1930,15 @@ export const CheckoutFlow: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                {confirmedOrder.paymentState === 'paid' || confirmedOrder.depositStatus === 'confirmed'
-                  ? 'تم تسجيل الطلب وتأكيد الدفع'
-                  : confirmedOrder.paymentMode === 'cash_on_delivery'
-                    ? 'تم تسجيل الطلب — الدفع عند الاستلام'
-                    : 'تم تسجيل طلبك بنجاح'}
-              </span>
               <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-                رقم الطلب: #{confirmedOrder.orderNumber}
+                {confirmedOrder.paymentState === 'paid' || confirmedOrder.depositStatus === 'confirmed'
+                  ? 'تم استلام الطلب بنجاح وجاري تحضيره'
+                  : confirmedOrder.paymentMode === 'cash_on_delivery'
+                    ? 'تم استلام طلبك بنجاح'
+                    : 'تم استلام طلبك بنجاح'}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                {confirmedOrder.status === 'preparing'
-                  ? 'تم قبول الطلب وبدأ التحضير.'
-                  : confirmedOrder.status === 'delivering'
-                    ? 'طلبك خرج للتوصيل.'
-                    : confirmedOrder.status === 'completed'
-                      ? 'تم تسليم الطلب بنجاح.'
-                      : 'طلبك الآن بانتظار قبول المتجر. سنحدّث حالته تلقائياً في صفحة طلباتي.'}
+                رقم الطلب: #{confirmedOrder.orderNumber}
               </p>
             </div>
 
@@ -2009,7 +1985,10 @@ export const CheckoutFlow: React.FC = () => {
             <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('orders')}
+                onClick={async () => {
+                  await refreshOrders();
+                  setActiveTab('orders');
+                }}
                 className="flex-1 py-3 px-4 bg-cyan-700 hover:bg-cyan-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <FileText className="w-4 h-4" />
