@@ -6,7 +6,7 @@ export const BottomNav: React.FC = React.memo(() => {
   const { activeTab, setActiveTab, cartCount, orders, favorites } = useStore();
 
   const activeOrdersCount = orders.filter(
-    (o) => o.status === 'new' || o.status === 'preparing' || o.status === 'on_delivery'
+    (o) => o.status === 'pending' || o.status === 'preparing' || o.status === 'delivering'
   ).length;
 
   return (
