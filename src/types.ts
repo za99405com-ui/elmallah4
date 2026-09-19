@@ -68,12 +68,36 @@ export interface CartItem {
   notes?: string;
 }
 
-export type OrderStatus = 
-  | 'new'          // 🟡 طلب جديد (قيد المراجعة)
-  | 'preparing'    // 🔵 جاري التجهيز
-  | 'on_delivery'  // 🟠 خرج للتوصيل
-  | 'delivered'    // 🟢 تم التسليم
-  | 'cancelled';   // 🔴 تم الإلغاء
+export type OrderStatus =
+  | 'pending'      // طلب جديد / بانتظار قبول المتجر
+  | 'preparing'    // جاري التحضير
+  | 'delivering'   // خرج للتوصيل
+  | 'completed'    // تم التسليم
+  | 'cancelled';   // تم الإلغاء
+
+export type PaymentState =
+  | 'not_required'
+  | 'waiting'
+  | 'paid'
+  | 'needs_review';
+
+export interface PaymentSessionSummary {
+  id: string;
+  clientToken?: string;
+  orderId: string;
+  provider: string;
+  paymentSourceId?: string;
+  customerPaymentMethodId?: string;
+  paymentIntent?: PaymentIntent;
+  expectedAmount: number;
+  currency?: string;
+  paymentDestination?: string;
+  devicePublicId?: string;
+  status: 'waiting' | 'paid' | 'expired' | 'expired_needs_review' | 'needs_review' | 'cancelled';
+  expiresAt: string;
+  expectedPayerPhone?: string;
+  createdAt?: string;
+}
 
 export type PaymentMode = 
   | 'deposit_online'    // دفع إلكتروني (عربون أو سداد كامل) مع جلسة دفع
@@ -160,9 +184,10 @@ export interface Order {
   depositRequired: number;        // قيمة العربون المطلوب
   depositPaid: number;            // قيمة العربون المدفوع/المحول
   depositStatus: DepositStatus;   // حالة مراجعة العربون
+  paymentState?: PaymentState;     // الحالة المالية الموحّدة من admin3
   depositTransactionRef?: string; // رقم المعاملة أو اسم المحول
   remainingAmount: number;        // المبلغ المتبقي للسداد عند الاستلام
-  activeSession?: any;            // جلسة الدفع اللحظي المرتبطة بالطلب
+  activeSession?: PaymentSessionSummary | null;
   sessionError?: string;          // رسالة خطأ إنشاء جلسة الدفع إن وجدت
 
   status: OrderStatus;
