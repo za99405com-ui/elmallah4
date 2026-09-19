@@ -274,33 +274,17 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   }, [currentUser]);
 
-  // Orders: strictly private for this customer and device
-  const [orders, setOrders] = useState<Order[]>(() => {
-    const devId = getOrCreateDeviceId();
-    try {
-      const saved = localStorage.getItem(`almallah_orders_${devId}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Exclude any legacy test orders
-          return parsed.filter(o => o && o.customerName !== 'تجربة' && !o.id?.startsWith('mock'));
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return [];
-  });
+  // Orders are server-authoritative. Never hydrate order/payment status from
+  // localStorage because it can leave the customer looking at stale payment state.
+  const [orders, setOrders] = useState<Order[]>([]);
 
   useEffect(() => {
-    if (customerDeviceId) {
-      try {
-        localStorage.setItem(`almallah_orders_${customerDeviceId}`, JSON.stringify(orders));
-      } catch {
-        // ignore
-      }
+    try {
+      localStorage.removeItem(`almallah_orders_${customerDeviceId}`);
+    } catch {
+      // Best-effort cleanup of the old stale order cache.
     }
-  }, [orders, customerDeviceId]);
+  }, [customerDeviceId]);
 
   const [currentTrackedOrder, setCurrentTrackedOrder] = useState<Order | null>(null);
   const [resumedPaymentOrder, setResumedPaymentOrder] = useState<Order | null>(null);
