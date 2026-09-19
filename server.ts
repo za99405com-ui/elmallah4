@@ -29,6 +29,7 @@ import {
   adminIntegrationPost,
   adminPublicPost,
 } from './src/server/adminApi.js';
+import { paymentProxyRouter } from './src/server/paymentProxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -210,6 +211,10 @@ export async function createServer() {
     });
     next();
   });
+
+  // One payment router for local, Vercel catch-all and explicit serverless adapters.
+  // admin3 remains the sole authority for payment sessions and payment state.
+  app.use('/api', paymentProxyRouter);
 
   // Customer Authentication Helper (Strictly from Bearer token)
   const getAuthenticatedCustomer = (req: express.Request): CustomerUser | null => {
