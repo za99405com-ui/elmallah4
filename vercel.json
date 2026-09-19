@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/api/auth/:path*", "destination": "/api/router?__path=auth/:path*" },
+    { "source": "/api/customer/:path*", "destination": "/api/router?__path=customer/:path*" },
+    { "source": "/api/orders/:path*", "destination": "/api/router?__path=orders/:path*" },
+    { "source": "/api/products/:path*", "destination": "/api/router?__path=products/:path*" },
+    { "source": "/api/ai/:path*", "destination": "/api/router?__path=ai/:path*" }
+  ]
+}
