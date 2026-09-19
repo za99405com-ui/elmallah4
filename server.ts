@@ -853,11 +853,30 @@ export async function createServer() {
     deliveryFee: number;
     totalAmount: number;
     depositAmount: number;
+    depositPaid?: number;
     depositStatus?: string;
+    paymentState?: 'not_required' | 'waiting' | 'paid' | 'needs_review';
     depositMethod?: string;
     depositReference?: string;
     paymentMode?: 'deposit_online' | 'cash_on_delivery';
     remainingAmount: number;
+    activeSession?: {
+      id: string;
+      clientToken?: string;
+      orderId: string;
+      provider: string;
+      paymentSourceId?: string;
+      customerPaymentMethodId?: string;
+      paymentIntent?: 'full_payment' | 'deposit';
+      expectedAmount: number;
+      currency?: string;
+      paymentDestination?: string;
+      devicePublicId?: string;
+      status: 'waiting' | 'paid' | 'expired' | 'expired_needs_review' | 'needs_review' | 'cancelled';
+      expiresAt: string;
+      expectedPayerPhone?: string;
+      createdAt?: string;
+    } | null;
     status: string;
     notes?: string;
     createdAt: string;
@@ -880,14 +899,16 @@ export async function createServer() {
   const mapAdminIntegrationOrder = (
     adminOrder: AdminIntegrationOrder
   ): Order => {
+    // Canonical internal statuses are identical to admin3.
+    // Old aliases remain read-only compatibility for historical records.
     const statusMap: Record<string, Order['status']> = {
-      pending: 'new',
-      new: 'new',
+      pending: 'pending',
+      new: 'pending',
       preparing: 'preparing',
-      delivering: 'on_delivery',
-      on_delivery: 'on_delivery',
-      completed: 'delivered',
-      delivered: 'delivered',
+      delivering: 'delivering',
+      on_delivery: 'delivering',
+      completed: 'completed',
+      delivered: 'completed',
       cancelled: 'cancelled',
     };
 
@@ -972,14 +993,24 @@ export async function createServer() {
       paymentMethod,
       rawPaymentMethod: isKnownMethod ? undefined : rawPaymentMethod,
       depositRequired: Number(adminOrder.depositAmount || 0),
-      depositPaid:
-        depositStatus === 'confirmed'
-          ? Number(adminOrder.depositAmount || 0)
-          : 0,
+      depositPaid: Number(adminOrder.depositPaid || 0),
       depositStatus,
+      paymentState:
+        adminOrder.paymentState ||
+        (paymentMode === 'cash_on_delivery' || depositStatus === 'not_required'
+          ? 'not_required'
+          : depositStatus === 'confirmed'
+            ? 'paid'
+            : depositStatus === 'rejected'
+              ? 'needs_review'
+              : 'waiting'),
       depositTransactionRef: adminOrder.depositReference,
-      remainingAmount: Number(adminOrder.remainingAmount ?? (Number(adminOrder.totalAmount || 0) - (depositStatus === 'confirmed' ? Number(adminOrder.depositAmount || 0) : 0))),
-      status: statusMap[adminOrder.status] || 'new',
+      remainingAmount: Number(
+        adminOrder.remainingAmount ??
+          (Number(adminOrder.totalAmount || 0) - Number(adminOrder.depositPaid || 0))
+      ),
+      activeSession: adminOrder.activeSession || null,
+      status: statusMap[adminOrder.status] || 'pending',
       createdAt: adminOrder.createdAt,
       deliveryTargetDate: 'نفس اليوم مبرد 🚚',
       isBeforeCutoff: true,
