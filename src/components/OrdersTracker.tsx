@@ -16,16 +16,21 @@ import {
   Tag,
   History,
   ArrowRight,
-  RefreshCw
+  RefreshCw,
+  Trash2,
+  Pencil
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { Order, OrderStatus, getPaymentMethodLabel } from '../types';
 import { getWhatsAppLink } from '../utils/whatsapp';
+import { api } from '../utils/api';
 
 export const OrdersTracker: React.FC = React.memo(() => {
   const { orders, reOrder, currentTrackedOrder, setActiveTab, storeSettings, refreshOrders, setResumedPaymentOrder } = useStore();
   const [searchPhoneOrNumber, setSearchPhoneOrNumber] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string>('');
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(
     currentTrackedOrder ? currentTrackedOrder.id : null
   );
@@ -42,6 +47,49 @@ export const OrdersTracker: React.FC = React.memo(() => {
     setIsRefreshing(true);
     await refreshOrders();
     setTimeout(() => setIsRefreshing(false), 600);
+  };
+
+  const isUnpaidPendingOrder = (order: Order) =>
+    order.status === 'pending' &&
+    (order.paymentState === 'waiting' || (!order.paymentState && order.depositStatus === 'pending')) &&
+    Number(order.depositPaid || 0) <= 0;
+
+  const handleCancelUnpaidOrder = async (order: Order) => {
+    if (!isUnpaidPendingOrder(order) || busyOrderId) return;
+    if (!window.confirm(`إلغاء الطلب #${order.orderNumber}؟ لن يتم خصم أي مبلغ.`)) return;
+
+    setBusyOrderId(order.id);
+    setActionError('');
+    const result = await api.cancelOrder(order.id);
+    if (!result.success) {
+      setActionError(result.error || 'تعذر إلغاء الطلب');
+      setBusyOrderId(null);
+      return;
+    }
+
+    setExpandedOrderId(null);
+    setResumedPaymentOrder(null);
+    await refreshOrders();
+    setBusyOrderId(null);
+  };
+
+  const handleEditUnpaidOrder = async (order: Order) => {
+    if (!isUnpaidPendingOrder(order) || busyOrderId) return;
+    if (!window.confirm('سيتم إلغاء الطلب غير المدفوع وإعادة أصنافه إلى السلة لتعديلها. متابعة؟')) return;
+
+    setBusyOrderId(order.id);
+    setActionError('');
+    const result = await api.cancelOrder(order.id);
+    if (!result.success) {
+      setActionError(result.error || 'تعذر تجهيز الطلب للتعديل');
+      setBusyOrderId(null);
+      return;
+    }
+
+    reOrder(order);
+    setResumedPaymentOrder(null);
+    await refreshOrders();
+    setBusyOrderId(null);
   };
 
   const getStatusBadge = (status: OrderStatus) => {
@@ -120,7 +168,7 @@ export const OrdersTracker: React.FC = React.memo(() => {
   };
 
   // Only show active / ongoing orders (exclude delivered ones per user request)
-  const activeOrders = orders.filter((o) => o.status !== 'completed');
+  const activeOrders = orders.filter((o) => o.status !== 'completed' && o.status !== 'cancelled');
   const deliveredCount = orders.filter((o) => o.status === 'completed').length;
 
   const filteredOrders = activeOrders.filter((order) => {
@@ -191,6 +239,12 @@ export const OrdersTracker: React.FC = React.memo(() => {
           <Search className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
         </div>
       </div>
+
+      {actionError && (
+        <div className="rounded-xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3 py-2 text-xs font-bold text-rose-700 dark:text-rose-300">
+          {actionError}
+        </div>
+      )}
 
       {/* Delivered Orders Link Notice */}
       {deliveredCount > 0 && (
@@ -500,6 +554,29 @@ export const OrdersTracker: React.FC = React.memo(() => {
                                 : 'إكمال الدفع لهذا الطلب'}
                           </span>
                         </button>
+                      )}
+
+                      {isUnpaidPendingOrder(order) && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            disabled={busyOrderId === order.id}
+                            onClick={() => handleEditUnpaidOrder(order)}
+                            className="py-2 px-3 border border-cyan-300 dark:border-cyan-800 text-cyan-800 dark:text-cyan-300 font-bold text-xs rounded-xl hover:bg-cyan-50 dark:hover:bg-cyan-950/30 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>تعديل الطلب</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyOrderId === order.id}
+                            onClick={() => handleCancelUnpaidOrder(order)}
+                            className="py-2 px-3 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>{busyOrderId === order.id ? 'جارٍ التنفيذ...' : 'إلغاء الطلب'}</span>
+                          </button>
+                        </div>
                       )}
 
                       <div className="flex flex-col sm:flex-row gap-2">
