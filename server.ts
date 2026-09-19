@@ -1297,39 +1297,7 @@ export async function createServer() {
       const adminResult = await adminPublicPost<{
         success: boolean;
         message?: string;
-        order: {
-          id: string;
-          orderNumber: string;
-          customerName: string;
-          customerPhone: string;
-          customerAddress: string;
-          city?: string;
-          district?: string;
-          subtotal: number;
-          discountAmount: number;
-          couponCode?: string;
-          deliveryFee: number;
-          totalAmount: number;
-          depositAmount: number;
-          depositStatus: string;
-          depositMethod?: string;
-          depositReference?: string;
-          remainingAmount: number;
-          status: string;
-          notes?: string;
-          createdAt: string;
-          updatedAt?: string;
-          items: Array<{
-            productId: string;
-            variantId?: string;
-            productName: string;
-            variantTitle?: string;
-            pricingUnit: string;
-            unitPrice: number;
-            quantity: number;
-            totalPrice: number;
-          }>;
-        };
+        order: AdminIntegrationOrder;
       }>('/orders', {
         customerName: customerName.trim(),
         customerPhone: verifiedPhone,
@@ -1365,64 +1333,15 @@ export async function createServer() {
       });
 
       const adminOrder = adminResult.order;
-
-      const statusMap: Record<string, Order['status']> = {
-        pending: 'new',
-        new: 'new',
-        preparing: 'preparing',
-        on_delivery: 'on_delivery',
-        delivered: 'delivered',
-        cancelled: 'cancelled',
-      };
-
+      const mappedOrder = mapAdminIntegrationOrder(adminOrder);
       const customerOrder: Order = {
-        id: adminOrder.id,
-        orderNumber: adminOrder.orderNumber,
-        customerName: adminOrder.customerName,
-        customerPhone: adminOrder.customerPhone,
+        ...mappedOrder,
         governorate: governorate.trim(),
-        city: adminOrder.city || '',
-        district: adminOrder.district || '',
-        address: adminOrder.customerAddress,
-        notes: adminOrder.notes || '',
-        items: adminOrder.items.map((item) => ({
-          productId: item.productId,
-          variantId: item.variantId,
-          variantLabel: item.variantTitle,
-          productName: item.productName,
-          productImage: '',
-          unit:
-            item.pricingUnit === 'piece' ? 'قطعة' : 'كيلو',
-          price: Number(item.unitPrice || 0),
-          quantity: Number(item.quantity || 0),
-          itemTotal: Number(item.totalPrice || 0),
-        })),
-        subtotal: Number(adminOrder.subtotal || 0),
-        deliveryFee: Number(adminOrder.deliveryFee || 0),
-        discountAmount: Number(adminOrder.discountAmount || 0),
-        couponCode: adminOrder.couponCode,
-        total: Number(adminOrder.totalAmount || 0),
         paymentMode: resolvedPaymentMode,
         paymentMethod: resolvedDepositMethod,
         paymentIntent: resolvedPaymentIntent,
         paymentMethodCode: resolvedPaymentMethodCode,
         customerPaymentMethodId: resolvedCustomerPaymentMethodId,
-        depositRequired: Number(adminOrder.depositAmount || 0),
-        depositPaid: 0,
-        depositStatus:
-          adminOrder.depositStatus === 'confirmed'
-            ? 'confirmed'
-            : adminOrder.depositStatus === 'rejected'
-              ? 'rejected'
-              : resolvedPaymentMode === 'cash_on_delivery' ||
-                adminOrder.depositStatus === 'not_required' ||
-                Number(adminOrder.depositAmount || 0) <= 0
-                ? 'not_required'
-                : 'pending',
-        depositTransactionRef: adminOrder.depositReference,
-        remainingAmount: Number(adminOrder.remainingAmount || 0),
-        status: statusMap[adminOrder.status] || 'new',
-        createdAt: adminOrder.createdAt,
       };
 
       return res.status(201).json({
