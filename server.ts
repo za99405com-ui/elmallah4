@@ -807,7 +807,59 @@ export async function createServer() {
     }
   });
 
-  // B) GET /api/orders/:id
+  // B) DELETE /api/orders/:id
+  // Customer may cancel only a still-pending, unpaid order that belongs to the
+  // authenticated phone number. admin3 remains authoritative and cancels any
+  // live payment session at the same time.
+  app.delete('/api/orders/:id', async (req, res) => {
+    const customer = getAuthenticatedCustomer(req);
+
+    if (!customer) {
+      return res.status(401).json({
+        success: false,
+        error: 'غير مصرح: يرجى تسجيل الدخول أولاً',
+      });
+    }
+
+    const orderIdOrNumber = String(req.params.id || '').trim();
+    if (!orderIdOrNumber) {
+      return res.status(400).json({ success: false, error: 'معرف الطلب غير صالح' });
+    }
+
+    try {
+      const result = await adminIntegrationPost<{
+        success: boolean;
+        order: AdminIntegrationOrder;
+      }>('/integration/orders/cancel', {
+        orderIdOrNumber,
+        phone: customer.phone,
+      });
+
+      return res.json({
+        success: true,
+        data: mapAdminIntegrationOrder(result.order),
+      });
+    } catch (err: any) {
+      const status = Number(err?.status);
+      if (status === 404) {
+        return res.status(404).json({ success: false, error: 'الطلب غير موجود' });
+      }
+      if (status === 409) {
+        return res.status(409).json({
+          success: false,
+          error: err?.message || 'لا يمكن إلغاء هذا الطلب بعد بدء التنفيذ أو تأكيد الدفع',
+        });
+      }
+
+      console.error('[Admin API] Failed to cancel customer order:', err);
+      return res.status(503).json({
+        success: false,
+        error: 'تعذر إلغاء الطلب حالياً. حاول مرة أخرى.',
+      });
+    }
+  });
+
+  // C) GET /api/orders/:id
   // Ownership is enforced by Admin using order id/number + authenticated phone.
   app.get('/api/orders/:id', async (req, res) => {
     const customer = getAuthenticatedCustomer(req);
