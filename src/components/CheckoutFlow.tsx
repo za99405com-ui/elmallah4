@@ -259,6 +259,7 @@ export const CheckoutFlow: React.FC = () => {
     storeSettings,
     setActiveTab,
     setCurrentTrackedOrder,
+    refreshOrders,
     resumedPaymentOrder,
     setResumedPaymentOrder
   } = useStore();
@@ -439,13 +440,43 @@ export const CheckoutFlow: React.FC = () => {
       setActiveOnlineOrder(resumedPaymentOrder);
       setCurrentStep('online_payment');
 
-      // Attempt to restore or create session for this unpaid order
+      // Prefer the authoritative active session attached by admin3.
+      // Only create a new attempt when no live session exists.
       const initResumedSession = async () => {
         setIsSubmittingOrder(true);
         try {
+          const existing = resumedPaymentOrder.activeSession;
+          if (
+            existing &&
+            existing.status === 'waiting' &&
+            existing.clientToken &&
+            new Date(existing.expiresAt).getTime() > Date.now()
+          ) {
+            setPaymentSession({
+              id: existing.id,
+              clientToken: existing.clientToken,
+              orderId: existing.orderId,
+              provider: existing.provider,
+              paymentSourceId: existing.paymentSourceId,
+              customerPaymentMethodId: existing.customerPaymentMethodId,
+              paymentIntent: existing.paymentIntent,
+              expectedAmount: existing.expectedAmount,
+              amountTolerance: paymentConfig?.amountTolerance || 0,
+              currency: existing.currency || 'EGP',
+              deviceId: existing.devicePublicId,
+              paymentDestination: existing.paymentDestination,
+              status: existing.status,
+              expiresAt: existing.expiresAt,
+              expectedPayerPhone: existing.expectedPayerPhone
+            });
+            setSessionErrorMsg(null);
+            return;
+          }
+
           const isFull =
             resumedPaymentOrder.paymentIntent === 'full_payment' ||
             (resumedPaymentOrder.depositRequired >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
+
           const sessionRes = await api.createPaymentSession({
             orderId: resumedPaymentOrder.id,
             customerPhone: resumedPaymentOrder.customerPhone,
@@ -458,10 +489,13 @@ export const CheckoutFlow: React.FC = () => {
             setPaymentSession(sessionRes.data);
             setSessionErrorMsg(null);
           } else {
-            setSessionErrorMsg(sessionRes.error || 'لا يوجد جهاز دفع متاح حالياً لهذا الطلب. يمكنك مراجعته في صفحة طلباتي.');
+            setSessionErrorMsg(
+              sessionRes.error ||
+                'تعذر فتح الدفع حالياً. طلبك محفوظ ويمكنك المحاولة مرة أخرى من طلباتي.'
+            );
           }
         } catch {
-          setSessionErrorMsg('تعذر تخصيص جلسة دفع حالياً. طلبك مسجل بالفعل في صفحة طلباتي.');
+          setSessionErrorMsg('تعذر فتح الدفع حالياً. طلبك محفوظ في صفحة طلباتي.');
         } finally {
           setIsSubmittingOrder(false);
         }
@@ -470,7 +504,7 @@ export const CheckoutFlow: React.FC = () => {
       initResumedSession();
       setResumedPaymentOrder(null);
     }
-  }, [resumedPaymentOrder, setResumedPaymentOrder]);
+  }, [resumedPaymentOrder, setResumedPaymentOrder, paymentConfig?.amountTolerance]);
 
   // Check for stored active session on browser refresh (authoritative active status: waiting)
   useEffect(() => {
@@ -546,13 +580,16 @@ export const CheckoutFlow: React.FC = () => {
         const orderUpdated: Order = {
           ...(activeOnlineOrder || ({} as Order)),
           depositStatus: 'confirmed',
+          paymentState: 'paid',
           depositPaid: paidAmt,
-          remainingAmount: Math.max(0, (activeOnlineOrder?.total || totalAmount) - paidAmt)
+          remainingAmount: Math.max(0, (activeOnlineOrder?.total || totalAmount) - paidAmt),
+          activeSession: null
         };
         setConfirmedOrder(orderUpdated);
         setCurrentTrackedOrder(orderUpdated);
         setCurrentStep('confirmation');
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        void refreshOrders();
 
         // Confetti celebration
         try {
@@ -571,7 +608,7 @@ export const CheckoutFlow: React.FC = () => {
       clearInterval(countdownTimer);
       unsubscribe();
     };
-  }, [paymentSession, activeOnlineOrder, depositAmount, totalAmount, setCurrentTrackedOrder]);
+  }, [paymentSession, activeOnlineOrder, depositAmount, totalAmount, setCurrentTrackedOrder, refreshOrders]);
 
   /* -------------------------------------------------------------------------- */
   /* Step 1: Handlers (Cart)                                                    */
