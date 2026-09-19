@@ -44,84 +44,84 @@ export const OrdersTracker: React.FC = React.memo(() => {
     setTimeout(() => setIsRefreshing(false), 600);
   };
 
-  const getStatusBadge = (status: OrderStatus, order?: Order) => {
+  const getStatusBadge = (status: OrderStatus) => {
     switch (status) {
-      case 'new': {
-        const isCod = order?.paymentMode === 'cash_on_delivery' || order?.depositStatus === 'not_required';
-        const isConfirmed = order?.depositStatus === 'confirmed';
-        const isRejected = order?.depositStatus === 'rejected';
-
-        let description = 'تم تسجيل الطلب وجاري مراجعته وتجهيزه.';
-        if (!isCod && order) {
-          if (isConfirmed) {
-            description = 'تم تأكيد العربون وجاري متابعة تجهيز الطلب.';
-          } else if (isRejected) {
-            description = 'تعذر تأكيد العربون. يرجى التواصل معنا أو مراجعة طريقة الدفع.';
-          } else {
-            description = 'الطلب مسجل وفي انتظار تأكيد العربون.';
-          }
-        }
-
+      case 'pending':
         return {
-          bg: isRejected
-            ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-200 dark:border-rose-800'
-            : isConfirmed || isCod
-            ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800'
-            : 'bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800',
-          label: isCod
-            ? 'طلب جديد'
-            : isConfirmed
-            ? 'عربون مؤكد'
-            : isRejected
-            ? 'عربون متعذر'
-            : 'بانتظار العربون',
-          icon: isCod || isConfirmed ? '🐟' : isRejected ? '❌' : '⏳',
-          description
+          bg: 'bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700',
+          label: 'طلب جديد',
+          icon: '🐟',
+          description: 'تم تسجيل طلبك وهو بانتظار قبول المتجر.'
         };
-      }
       case 'preparing':
         return {
           bg: 'bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800',
-          label: 'جاري التجهيز',
+          label: 'جاري التحضير',
           icon: '📦',
-          description: order?.depositStatus === 'rejected'
-            ? 'تعذر تأكيد العربون. يرجى التواصل معنا أو مراجعة طريقة الدفع.'
-            : 'يتم الآن تحضير وتعبئة الأسماك الطازجة مبردة'
+          description: 'المتجر قبل الطلب ويقوم الآن بتجهيزه.'
         };
-      case 'on_delivery':
+      case 'delivering':
         return {
           bg: 'bg-orange-50 dark:bg-orange-950/40 text-orange-900 dark:text-orange-200 border-orange-200 dark:border-orange-800',
           label: 'خرج للتوصيل',
           icon: '🚚',
-          description: 'المندوب في الطريق إليك مع حافظة التبريد'
+          description: 'طلبك في الطريق إليك.'
         };
-      case 'delivered':
+      case 'completed':
         return {
           bg: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800',
           label: 'تم التسليم',
           icon: '✅',
-          description: 'تم تسليم طلبك بنجاح. بالهناء والشفاء!'
+          description: 'تم تسليم طلبك بنجاح.'
         };
       case 'cancelled':
         return {
           bg: 'bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-200 dark:border-rose-800',
           label: 'تم الإلغاء',
           icon: '❌',
-          description: 'تم إلغاء هذا الطلب'
-        };
-      default:
-        return {
-          bg: 'bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700',
-          label: 'قيد المراجعة',
-          icon: '📦',
-          description: 'تم تسجيل الطلب وجاري مراجعته وتجهيزه.'
+          description: 'تم إلغاء هذا الطلب.'
         };
     }
   };
 
+  const getPaymentBadge = (order: Order) => {
+    const state =
+      order.paymentState ||
+      (order.paymentMode === 'cash_on_delivery' || order.depositStatus === 'not_required'
+        ? 'not_required'
+        : order.depositStatus === 'confirmed'
+          ? 'paid'
+          : order.depositStatus === 'rejected'
+            ? 'needs_review'
+            : 'waiting');
+
+    if (state === 'not_required') {
+      return {
+        label: 'الدفع عند الاستلام',
+        className: 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+      };
+    }
+    if (state === 'paid') {
+      return {
+        label: `تم الدفع ${order.depositPaid || order.depositRequired || ''} ج.م`.trim(),
+        className: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300'
+      };
+    }
+    if (state === 'needs_review') {
+      return {
+        label: 'الدفع يحتاج مراجعة',
+        className: 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300'
+      };
+    }
+    return {
+      label: `بانتظار الدفع ${order.depositRequired || ''} ج.م`.trim(),
+      className: 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
+    };
+  };
+
   // Only show active / ongoing orders (exclude delivered ones per user request)
-  const activeOrders = orders.filter((o) => o.status !== 'delivered');
-  const deliveredCount = orders.filter((o) => o.status === 'delivered').length;
+  const activeOrders = orders.filter((o) => o.status !== 'completed');
+  const deliveredCount = orders.filter((o) => o.status === 'completed').length;
 
   const filteredOrders = activeOrders.filter((order) => {
     if (!searchPhoneOrNumber.trim()) return true;
@@ -251,7 +251,8 @@ export const OrdersTracker: React.FC = React.memo(() => {
       ) : (
         <div className="space-y-2.5">
           {filteredOrders.map((order) => {
-            const badge = getStatusBadge(order.status, order);
+            const badge = getStatusBadge(order.status);
+            const paymentBadge = getPaymentBadge(order);
             const isExpanded = expandedOrderId === order.id;
 
             return (
@@ -280,11 +281,9 @@ export const OrdersTracker: React.FC = React.memo(() => {
                             التسليم: {order.deliveryTargetDate}
                           </span>
                         )}
-                        {order.depositStatus === 'confirmed' && (
-                          <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 px-1.5 py-0.5 rounded-md font-bold">
-                            العربون مؤكد ✓
-                          </span>
-                        )}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold ${paymentBadge.className}`}>
+                          {paymentBadge.label}
+                        </span>
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5 mt-0.5">
                         <span>{order.customerName}</span>
@@ -314,7 +313,7 @@ export const OrdersTracker: React.FC = React.memo(() => {
                   <div className="grid grid-cols-4 gap-1.5 text-center text-xs">
                     {/* Step 1: New */}
                     <div className={`p-1.5 rounded-xl border ${
-                      order.status === 'new'
+                      order.status === 'pending'
                         ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700 font-bold text-amber-900 dark:text-amber-200'
                         : order.status !== 'cancelled'
                         ? 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
@@ -328,7 +327,7 @@ export const OrdersTracker: React.FC = React.memo(() => {
                     <div className={`p-1.5 rounded-xl border ${
                       order.status === 'preparing'
                         ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-300 dark:border-blue-700 font-bold text-blue-900 dark:text-blue-200'
-                        : order.status === 'on_delivery' || order.status === 'delivered'
+                        : order.status === 'delivering' || order.status === 'completed'
                         ? 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
                         : 'opacity-40'
                     }`}>
@@ -338,9 +337,9 @@ export const OrdersTracker: React.FC = React.memo(() => {
 
                     {/* Step 3: On delivery */}
                     <div className={`p-1.5 rounded-xl border ${
-                      order.status === 'on_delivery'
+                      order.status === 'delivering'
                         ? 'bg-orange-50 dark:bg-orange-950/60 border-orange-300 dark:border-orange-700 font-bold text-orange-900 dark:text-orange-200'
-                        : order.status === 'delivered'
+                        : order.status === 'completed'
                         ? 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
                         : 'opacity-40'
                     }`}>
@@ -350,7 +349,7 @@ export const OrdersTracker: React.FC = React.memo(() => {
 
                     {/* Step 4: Delivered */}
                     <div className={`p-1.5 rounded-xl border ${
-                      order.status === 'delivered'
+                      order.status === 'completed'
                         ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-400 dark:border-emerald-700 font-bold text-emerald-900 dark:text-emerald-200'
                         : 'opacity-40'
                     }`}>
@@ -482,7 +481,9 @@ export const OrdersTracker: React.FC = React.memo(() => {
 
                     {/* Actions: Resume Payment / Re-order / WhatsApp Help */}
                     <div className="space-y-2 pt-1">
-                      {order.depositStatus !== 'confirmed' && (order.paymentMode === 'deposit_online' || order.depositRequired > 0) && (
+                      {order.status === 'pending' &&
+                        (order.paymentState === 'waiting' || (!order.paymentState && order.depositStatus === 'pending')) &&
+                        (order.paymentMode === 'deposit_online' || order.depositRequired > 0) && (
                         <button
                           onClick={() => {
                             setResumedPaymentOrder(order);

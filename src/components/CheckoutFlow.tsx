@@ -259,6 +259,7 @@ export const CheckoutFlow: React.FC = () => {
     storeSettings,
     setActiveTab,
     setCurrentTrackedOrder,
+    refreshOrders,
     resumedPaymentOrder,
     setResumedPaymentOrder
   } = useStore();
@@ -439,13 +440,43 @@ export const CheckoutFlow: React.FC = () => {
       setActiveOnlineOrder(resumedPaymentOrder);
       setCurrentStep('online_payment');
 
-      // Attempt to restore or create session for this unpaid order
+      // Prefer the authoritative active session attached by admin3.
+      // Only create a new attempt when no live session exists.
       const initResumedSession = async () => {
         setIsSubmittingOrder(true);
         try {
+          const existing = resumedPaymentOrder.activeSession;
+          if (
+            existing &&
+            existing.status === 'waiting' &&
+            existing.clientToken &&
+            new Date(existing.expiresAt).getTime() > Date.now()
+          ) {
+            setPaymentSession({
+              id: existing.id,
+              clientToken: existing.clientToken,
+              orderId: existing.orderId,
+              provider: existing.provider,
+              paymentSourceId: existing.paymentSourceId,
+              customerPaymentMethodId: existing.customerPaymentMethodId,
+              paymentIntent: existing.paymentIntent,
+              expectedAmount: existing.expectedAmount,
+              amountTolerance: paymentConfig?.amountTolerance || 0,
+              currency: existing.currency || 'EGP',
+              deviceId: existing.devicePublicId,
+              paymentDestination: existing.paymentDestination,
+              status: existing.status,
+              expiresAt: existing.expiresAt,
+              expectedPayerPhone: existing.expectedPayerPhone
+            });
+            setSessionErrorMsg(null);
+            return;
+          }
+
           const isFull =
             resumedPaymentOrder.paymentIntent === 'full_payment' ||
             (resumedPaymentOrder.depositRequired >= resumedPaymentOrder.total && resumedPaymentOrder.total > 0);
+
           const sessionRes = await api.createPaymentSession({
             orderId: resumedPaymentOrder.id,
             customerPhone: resumedPaymentOrder.customerPhone,
@@ -458,10 +489,13 @@ export const CheckoutFlow: React.FC = () => {
             setPaymentSession(sessionRes.data);
             setSessionErrorMsg(null);
           } else {
-            setSessionErrorMsg(sessionRes.error || 'لا يوجد جهاز دفع متاح حالياً لهذا الطلب. يمكنك مراجعته في صفحة طلباتي.');
+            setSessionErrorMsg(
+              sessionRes.error ||
+                'تعذر فتح الدفع حالياً. طلبك محفوظ ويمكنك المحاولة مرة أخرى من طلباتي.'
+            );
           }
         } catch {
-          setSessionErrorMsg('تعذر تخصيص جلسة دفع حالياً. طلبك مسجل بالفعل في صفحة طلباتي.');
+          setSessionErrorMsg('تعذر فتح الدفع حالياً. طلبك محفوظ في صفحة طلباتي.');
         } finally {
           setIsSubmittingOrder(false);
         }
@@ -470,7 +504,7 @@ export const CheckoutFlow: React.FC = () => {
       initResumedSession();
       setResumedPaymentOrder(null);
     }
-  }, [resumedPaymentOrder, setResumedPaymentOrder]);
+  }, [resumedPaymentOrder, setResumedPaymentOrder, paymentConfig?.amountTolerance]);
 
   // Check for stored active session on browser refresh (authoritative active status: waiting)
   useEffect(() => {
@@ -546,13 +580,16 @@ export const CheckoutFlow: React.FC = () => {
         const orderUpdated: Order = {
           ...(activeOnlineOrder || ({} as Order)),
           depositStatus: 'confirmed',
+          paymentState: 'paid',
           depositPaid: paidAmt,
-          remainingAmount: Math.max(0, (activeOnlineOrder?.total || totalAmount) - paidAmt)
+          remainingAmount: Math.max(0, (activeOnlineOrder?.total || totalAmount) - paidAmt),
+          activeSession: null
         };
         setConfirmedOrder(orderUpdated);
         setCurrentTrackedOrder(orderUpdated);
         setCurrentStep('confirmation');
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        void refreshOrders();
 
         // Confetti celebration
         try {
@@ -571,7 +608,7 @@ export const CheckoutFlow: React.FC = () => {
       clearInterval(countdownTimer);
       unsubscribe();
     };
-  }, [paymentSession, activeOnlineOrder, depositAmount, totalAmount, setCurrentTrackedOrder]);
+  }, [paymentSession, activeOnlineOrder, depositAmount, totalAmount, setCurrentTrackedOrder, refreshOrders]);
 
   /* -------------------------------------------------------------------------- */
   /* Step 1: Handlers (Cart)                                                    */
@@ -1549,12 +1586,12 @@ export const CheckoutFlow: React.FC = () => {
             <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
               {isFullPaymentSelection || (activeOnlineOrder as any)?.paymentIntent === 'full_payment'
                 ? 'إكمال سداد كامل الطلب إلكترونياً'
-                : 'إكمال تحويل العربون لتأكيد الطلب'}
+                : 'إكمال تحويل العربون'}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
               {isFullPaymentSelection || (activeOnlineOrder as any)?.paymentIntent === 'full_payment'
-                ? 'طلبك تم تسجيله وحفظه بنجاح. لإتمام التأكيد وبدء التجهيز، يرجى تحويل كامل المبلغ عبر وسيلة الدفع المحددة.'
-                : 'طلبك تم تسجيله وحفظه بنجاح. لإتمام التأكيد وبدء التجهيز، يرجى تحويل العربون الرمزي عبر المحفظة الإلكترونية.'}
+                ? 'طلبك تم تسجيله وحفظه. بعد تأكيد الدفع سيصبح الطلب بانتظار قبول المتجر.'
+                : 'طلبك تم تسجيله وحفظه. بعد تأكيد العربون سيصبح الطلب بانتظار قبول المتجر.'}
             </p>
           </div>
 
@@ -1782,7 +1819,7 @@ export const CheckoutFlow: React.FC = () => {
                     افتح {isActiveVodafone ? 'فودافون كاش' : isActiveInstapay ? 'تطبيق إنستاباي' : 'تطبيق الدفع المحدد'}.
                   </li>
                   <li>حوّل مبلغ <strong>{paymentSession.expectedAmount} جنيه</strong> بالضبط إلى الوجهة أعلاه.</li>
-                  <li>ابق في هذه الصفحة لحظات، وسيتم تأكيد طلبك تلقائياً فور وصول إشعار التحويل.</li>
+                  <li>ابق في هذه الصفحة لحظات، وسيتم تأكيد الدفع تلقائياً فور وصول إشعار التحويل.</li>
                 </ol>
               </div>
 
@@ -1820,7 +1857,7 @@ export const CheckoutFlow: React.FC = () => {
                 {paymentSession.status === 'paid' && (
                   <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-black">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    <span>تم استلام التحويل وتأكيد الطلب بنجاح! جارِ التوجيه...</span>
+                    <span>تم استلام التحويل وتأكيد الدفع. الطلب الآن بانتظار قبول المتجر...</span>
                   </div>
                 )}
 
@@ -1898,7 +1935,7 @@ export const CheckoutFlow: React.FC = () => {
       )}
 
       {/* ================================================================== */}
-      {/* STEP 5: ORDER CONFIRMATION PAGE ("هل تم إنشاء وتأكيد طلبي بنجاح؟")   */}
+      {/* STEP 5: ORDER REGISTERED / PAYMENT CONFIRMED PAGE */}
       {/* ================================================================== */}
       {currentStep === 'confirmation' && confirmedOrder && (
         <div className="space-y-4">
@@ -1909,13 +1946,23 @@ export const CheckoutFlow: React.FC = () => {
 
             <div className="space-y-1">
               <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                تم استلام طلبك وتأكيده بنجاح!
+                {confirmedOrder.paymentState === 'paid' || confirmedOrder.depositStatus === 'confirmed'
+                  ? 'تم تسجيل الطلب وتأكيد الدفع'
+                  : confirmedOrder.paymentMode === 'cash_on_delivery'
+                    ? 'تم تسجيل الطلب — الدفع عند الاستلام'
+                    : 'تم تسجيل طلبك بنجاح'}
               </span>
               <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
                 رقم الطلب: #{confirmedOrder.orderNumber}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                جاري تجهيز الأسماك الطازجة وتنظيفها بعناية لتصلك مبردة حتى باب منزلك.
+                {confirmedOrder.status === 'preparing'
+                  ? 'تم قبول الطلب وبدأ التحضير.'
+                  : confirmedOrder.status === 'delivering'
+                    ? 'طلبك خرج للتوصيل.'
+                    : confirmedOrder.status === 'completed'
+                      ? 'تم تسليم الطلب بنجاح.'
+                      : 'طلبك الآن بانتظار قبول المتجر. سنحدّث حالته تلقائياً في صفحة طلباتي.'}
               </p>
             </div>
 
@@ -1972,14 +2019,14 @@ export const CheckoutFlow: React.FC = () => {
               <a
                 href={getWhatsAppLink(
                   storeSettings.whatsappNumber,
-                  `مرحباً متجر الملاح، أود تأكيد ومتابعة الطلب رقم ${confirmedOrder.orderNumber} باسم ${confirmedOrder.customerName}`
+                  `مرحباً متجر الملاح، أود متابعة الطلب رقم ${confirmedOrder.orderNumber} باسم ${confirmedOrder.customerName}`
                 )}
                 target="_blank"
                 rel="noreferrer"
                 className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <MessageCircle className="w-4 h-4" />
-                <span>مشاركة وتأكيد عبر واتساب</span>
+                <span>متابعة عبر واتساب</span>
               </a>
             </div>
 

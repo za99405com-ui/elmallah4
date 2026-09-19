@@ -18,7 +18,7 @@ export const Navbar: React.FC = React.memo(() => {
   } = useStore();
 
   const activeOrdersCount = orders.filter(
-    (o) => o.status === 'new' || o.status === 'preparing' || o.status === 'on_delivery'
+    (o) => o.status === 'pending' || o.status === 'preparing' || o.status === 'delivering'
   ).length;
 
   return (

@@ -62,7 +62,7 @@ export const SettingsView: React.FC = React.memo(() => {
   const [reorderSuccessMsg, setReorderSuccessMsg] = useState<string>('');
 
   const deliveredOrders = useMemo(() => {
-    return orders.filter(o => o.status === 'delivered');
+    return orders.filter(o => o.status === 'completed');
   }, [orders]);
 
   const filteredHistoryOrders = useMemo(() => {

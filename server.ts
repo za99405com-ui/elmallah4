@@ -29,6 +29,7 @@ import {
   adminIntegrationPost,
   adminPublicPost,
 } from './src/server/adminApi.js';
+import { paymentProxyRouter } from './src/server/paymentProxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -210,6 +211,10 @@ export async function createServer() {
     });
     next();
   });
+
+  // One payment router for local, Vercel catch-all and explicit serverless adapters.
+  // admin3 remains the sole authority for payment sessions and payment state.
+  app.use('/api', paymentProxyRouter);
 
   // Customer Authentication Helper (Strictly from Bearer token)
   const getAuthenticatedCustomer = (req: express.Request): CustomerUser | null => {
@@ -579,264 +584,9 @@ export async function createServer() {
   // NEVER uses ?phone= for authorization
   // ==========================================
 
-  type CustomerOrdersResult = 
-    | { status: 'success'; orders: Order[] }
-    | { status: 'error'; message: string };
-
-  // Durable Supabase order fetcher for customer orders using safe parameterized queries
-  async function fetchOrdersFromSupabaseForCustomer(
-    supabase: ReturnType<typeof getServerSupabase>,
-    customerId?: string,
-    customerPhone?: string
-  ): Promise<CustomerOrdersResult> {
-    if (!supabase) return { status: 'error', message: 'عميل قاعدة البيانات غير متصل' };
-
-    try {
-      const queries: Array<PromiseLike<any>> = [];
-      if (customerId) {
-        queries.push(
-          supabase
-            .from('orders')
-            .select('*')
-            .eq('customer_id', customerId)
-            .order('created_at', { ascending: false })
-        );
-      }
-      if (customerPhone) {
-        queries.push(
-          supabase
-            .from('orders')
-            .select('*')
-            .eq('customer_phone', customerPhone)
-            .order('created_at', { ascending: false })
-        );
-      }
-
-      if (queries.length === 0) {
-        return { status: 'success', orders: [] };
-      }
-
-      const results = await Promise.all(queries);
-      const allRows: any[] = [];
-      const seenIds = new Set<string>();
-
-      for (const res of results) {
-        if (res.error) {
-          console.warn('[Orders Read] Supabase orders query error:', res.error);
-          return { status: 'error', message: res.error.message || 'خطأ في جلب الطلبات' };
-        }
-        if (Array.isArray(res.data)) {
-          for (const row of res.data) {
-            const rId = String(row.id);
-            if (!seenIds.has(rId)) {
-              seenIds.add(rId);
-              allRows.push(row);
-            }
-          }
-        }
-      }
-
-      if (allRows.length === 0) {
-        return { status: 'success', orders: [] };
-      }
-
-      allRows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      const orderIds = allRows.map((r: any) => r.id);
-      const { data: itemRows, error: itemsErr } = await supabase
-        .from('order_items')
-        .select('*')
-        .in('order_id', orderIds);
-
-      const itemsByOrder: Record<string, OrderItem[]> = {};
-      if (!itemsErr && itemRows) {
-        for (const item of itemRows) {
-          if (!itemsByOrder[item.order_id]) {
-            itemsByOrder[item.order_id] = [];
-          }
-          const matchedProd = products.find(p => p.id === item.product_id);
-          itemsByOrder[item.order_id].push({
-            productId: item.product_id,
-            variantId: item.variant_id || undefined,
-            productName: item.product_name,
-            productImage: matchedProd?.image || '',
-            unit: matchedProd?.unit || 'كيلو',
-            variantLabel: item.variant_label || undefined,
-            price: Number(item.price),
-            quantity: Number(item.quantity),
-            itemTotal: Number(item.item_total),
-            piecesPerKiloRange: item.pieces_per_kilo_range || undefined,
-            notes: item.notes || undefined
-          });
-        }
-      }
-
-      const ordersList: Order[] = allRows.map((r: any): Order => ({
-        id: String(r.id),
-        orderNumber: r.order_number,
-        customerId: r.customer_id || undefined,
-        customerName: r.customer_name,
-        customerPhone: r.customer_phone,
-        governorate: r.governorate,
-        city: r.city || '',
-        district: r.district || '',
-        address: r.address,
-        notes: r.notes || '',
-        items: itemsByOrder[r.id] || [],
-        subtotal: Number(r.subtotal),
-        deliveryFee: Number(r.delivery_fee || 0),
-        discountAmount: Number(r.discount_amount || 0),
-        couponCode: r.coupon_code || undefined,
-        total: Number(r.total),
-        paymentMethod: r.payment_method,
-        depositRequired: Number(r.deposit_required || 0),
-        depositPaid: Number(r.deposit_paid || 0),
-        depositStatus: r.deposit_status || 'none',
-        depositTransactionRef: r.deposit_transaction_ref || undefined,
-        remainingAmount: Number(r.remaining_amount || 0),
-        status: r.status || 'new',
-        createdAt: r.created_at,
-        deliveryTargetDate: 'نفس اليوم مبرد 🚚',
-        isBeforeCutoff: true,
-        estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
-      }));
-
-      return { status: 'success', orders: ordersList };
-    } catch (err: any) {
-      console.warn('[Orders Read] Supabase orders query exception:', err);
-      return { status: 'error', message: err?.message || 'استثناء أثناء جلب الطلبات' };
-    }
-  }
-
-  type SingleOrderResult = 
-    | { status: 'found'; order: Order }
-    | { status: 'not_found' }
-    | { status: 'error'; message: string };
-
-  // Durable Supabase fetcher for single order using safe parameterized queries
-  async function fetchSingleOrderFromSupabase(
-    supabase: ReturnType<typeof getServerSupabase>,
-    orderIdOrNumber: string
-  ): Promise<SingleOrderResult> {
-    if (!supabase) return { status: 'error', message: 'عميل قاعدة البيانات غير متصل' };
-
-    const cleanInput = (orderIdOrNumber || '').trim();
-    if (!cleanInput) return { status: 'not_found' };
-
-    try {
-      let orderRow: any = null;
-
-      // 1. Safe query by id using exact .eq()
-      const { data: byId, error: errId } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', cleanInput)
-        .limit(1)
-        .maybeSingle();
-
-      if (errId) {
-        console.warn('[Single Order Read] Query by id error:', errId);
-      } else if (byId) {
-        orderRow = byId;
-      }
-
-      // 2. If not found by id, safe query by order_number using exact .eq()
-      if (!orderRow) {
-        const { data: byNumber, error: errNumber } = await supabase
-          .from('orders')
-          .select('*')
-          .eq('order_number', cleanInput)
-          .limit(1)
-          .maybeSingle();
-
-        if (errNumber) {
-          console.warn('[Single Order Read] Query by order_number error:', errNumber);
-          if (errId) {
-            return { status: 'error', message: errNumber.message || 'خطأ في قاعدة البيانات' };
-          }
-        } else if (byNumber) {
-          orderRow = byNumber;
-        }
-      }
-
-      if (!orderRow) {
-        if (errId) {
-          return { status: 'error', message: errId.message || 'خطأ في قاعدة البيانات' };
-        }
-        return { status: 'not_found' };
-      }
-
-      const { data: itemRows, error: itemsErr } = await supabase
-        .from('order_items')
-        .select('*')
-        .eq('order_id', orderRow.id);
-
-      if (itemsErr) {
-        console.warn('[Single Order Read] Order items query error:', itemsErr);
-      }
-
-      const items: OrderItem[] = (itemRows || []).map((item: any) => {
-        const matchedProd = products.find(p => p.id === item.product_id);
-        return {
-          productId: item.product_id,
-          variantId: item.variant_id || undefined,
-          productName: item.product_name,
-          productImage: matchedProd?.image || '',
-          unit: matchedProd?.unit || 'كيلو',
-          variantLabel: item.variant_label || undefined,
-          price: Number(item.price),
-          quantity: Number(item.quantity),
-          itemTotal: Number(item.item_total),
-          piecesPerKiloRange: item.pieces_per_kilo_range || undefined,
-          notes: item.notes || undefined
-        };
-      });
-
-      const rowPaymentMethodRaw = orderRow.payment_method ? String(orderRow.payment_method).trim() : undefined;
-      const isKnownRowMethod =
-        rowPaymentMethodRaw === 'cash_on_delivery' ||
-        rowPaymentMethodRaw === 'vodafone_cash' ||
-        rowPaymentMethodRaw === 'instapay' ||
-        rowPaymentMethodRaw === 'card';
-
-      const order: Order = {
-        id: String(orderRow.id),
-        orderNumber: orderRow.order_number,
-        customerId: orderRow.customer_id || undefined,
-        customerName: orderRow.customer_name,
-        customerPhone: orderRow.customer_phone,
-        governorate: orderRow.governorate,
-        city: orderRow.city || '',
-        district: orderRow.district || '',
-        address: orderRow.address,
-        notes: orderRow.notes || '',
-        items,
-        subtotal: Number(orderRow.subtotal),
-        deliveryFee: Number(orderRow.delivery_fee || 0),
-        discountAmount: Number(orderRow.discount_amount || 0),
-        couponCode: orderRow.coupon_code || undefined,
-        total: Number(orderRow.total),
-        paymentMode: orderRow.payment_mode || (orderRow.deposit_status === 'not_required' ? 'cash_on_delivery' : 'deposit_online'),
-        paymentMethod: isKnownRowMethod ? (rowPaymentMethodRaw as PaymentMethod) : 'cash_on_delivery',
-        rawPaymentMethod: !isKnownRowMethod ? rowPaymentMethodRaw : undefined,
-        depositRequired: Number(orderRow.deposit_required || 0),
-        depositPaid: Number(orderRow.deposit_paid || 0),
-        depositStatus: orderRow.deposit_status || 'none',
-        depositTransactionRef: orderRow.deposit_transaction_ref || undefined,
-        remainingAmount: Number(orderRow.remaining_amount || 0),
-        status: orderRow.status || 'new',
-        createdAt: orderRow.created_at,
-        deliveryTargetDate: 'نفس اليوم مبرد 🚚',
-        isBeforeCutoff: true,
-        estimatedDeliveryTime: 'خلال اليوم صيد مبرد'
-      };
-
-      return { status: 'found', order };
-    } catch (err: any) {
-      console.warn('[Single Order Read] Exception querying Supabase:', err);
-      return { status: 'error', message: err?.message || 'استثناء أثناء استرجاع تفاصيل الطلب' };
-    }
-  }
+  // Customer order reads are intentionally delegated to admin3 only.
+  // The old direct-Supabase order readers were removed to prevent divergent
+  // status/payment mapping and stale legacy behavior.
 
   type AdminIntegrationOrder = {
     id: string;
@@ -853,11 +603,30 @@ export async function createServer() {
     deliveryFee: number;
     totalAmount: number;
     depositAmount: number;
+    depositPaid?: number;
     depositStatus?: string;
+    paymentState?: 'not_required' | 'waiting' | 'paid' | 'needs_review';
     depositMethod?: string;
     depositReference?: string;
     paymentMode?: 'deposit_online' | 'cash_on_delivery';
     remainingAmount: number;
+    activeSession?: {
+      id: string;
+      clientToken?: string;
+      orderId: string;
+      provider: string;
+      paymentSourceId?: string;
+      customerPaymentMethodId?: string;
+      paymentIntent?: 'full_payment' | 'deposit';
+      expectedAmount: number;
+      currency?: string;
+      paymentDestination?: string;
+      devicePublicId?: string;
+      status: 'waiting' | 'paid' | 'expired' | 'expired_needs_review' | 'needs_review' | 'cancelled';
+      expiresAt: string;
+      expectedPayerPhone?: string;
+      createdAt?: string;
+    } | null;
     status: string;
     notes?: string;
     createdAt: string;
@@ -880,14 +649,16 @@ export async function createServer() {
   const mapAdminIntegrationOrder = (
     adminOrder: AdminIntegrationOrder
   ): Order => {
+    // Canonical internal statuses are identical to admin3.
+    // Old aliases remain read-only compatibility for historical records.
     const statusMap: Record<string, Order['status']> = {
-      pending: 'new',
-      new: 'new',
+      pending: 'pending',
+      new: 'pending',
       preparing: 'preparing',
-      delivering: 'on_delivery',
-      on_delivery: 'on_delivery',
-      completed: 'delivered',
-      delivered: 'delivered',
+      delivering: 'delivering',
+      on_delivery: 'delivering',
+      completed: 'completed',
+      delivered: 'completed',
       cancelled: 'cancelled',
     };
 
@@ -972,14 +743,24 @@ export async function createServer() {
       paymentMethod,
       rawPaymentMethod: isKnownMethod ? undefined : rawPaymentMethod,
       depositRequired: Number(adminOrder.depositAmount || 0),
-      depositPaid:
-        depositStatus === 'confirmed'
-          ? Number(adminOrder.depositAmount || 0)
-          : 0,
+      depositPaid: Number(adminOrder.depositPaid || 0),
       depositStatus,
+      paymentState:
+        adminOrder.paymentState ||
+        (paymentMode === 'cash_on_delivery' || depositStatus === 'not_required'
+          ? 'not_required'
+          : depositStatus === 'confirmed'
+            ? 'paid'
+            : depositStatus === 'rejected'
+              ? 'needs_review'
+              : 'waiting'),
       depositTransactionRef: adminOrder.depositReference,
-      remainingAmount: Number(adminOrder.remainingAmount ?? (Number(adminOrder.totalAmount || 0) - (depositStatus === 'confirmed' ? Number(adminOrder.depositAmount || 0) : 0))),
-      status: statusMap[adminOrder.status] || 'new',
+      remainingAmount: Number(
+        adminOrder.remainingAmount ??
+          (Number(adminOrder.totalAmount || 0) - Number(adminOrder.depositPaid || 0))
+      ),
+      activeSession: adminOrder.activeSession || null,
+      status: statusMap[adminOrder.status] || 'pending',
       createdAt: adminOrder.createdAt,
       deliveryTargetDate: 'نفس اليوم مبرد 🚚',
       isBeforeCutoff: true,
@@ -1516,39 +1297,7 @@ export async function createServer() {
       const adminResult = await adminPublicPost<{
         success: boolean;
         message?: string;
-        order: {
-          id: string;
-          orderNumber: string;
-          customerName: string;
-          customerPhone: string;
-          customerAddress: string;
-          city?: string;
-          district?: string;
-          subtotal: number;
-          discountAmount: number;
-          couponCode?: string;
-          deliveryFee: number;
-          totalAmount: number;
-          depositAmount: number;
-          depositStatus: string;
-          depositMethod?: string;
-          depositReference?: string;
-          remainingAmount: number;
-          status: string;
-          notes?: string;
-          createdAt: string;
-          updatedAt?: string;
-          items: Array<{
-            productId: string;
-            variantId?: string;
-            productName: string;
-            variantTitle?: string;
-            pricingUnit: string;
-            unitPrice: number;
-            quantity: number;
-            totalPrice: number;
-          }>;
-        };
+        order: AdminIntegrationOrder;
       }>('/orders', {
         customerName: customerName.trim(),
         customerPhone: verifiedPhone,
@@ -1584,64 +1333,15 @@ export async function createServer() {
       });
 
       const adminOrder = adminResult.order;
-
-      const statusMap: Record<string, Order['status']> = {
-        pending: 'new',
-        new: 'new',
-        preparing: 'preparing',
-        on_delivery: 'on_delivery',
-        delivered: 'delivered',
-        cancelled: 'cancelled',
-      };
-
+      const mappedOrder = mapAdminIntegrationOrder(adminOrder);
       const customerOrder: Order = {
-        id: adminOrder.id,
-        orderNumber: adminOrder.orderNumber,
-        customerName: adminOrder.customerName,
-        customerPhone: adminOrder.customerPhone,
+        ...mappedOrder,
         governorate: governorate.trim(),
-        city: adminOrder.city || '',
-        district: adminOrder.district || '',
-        address: adminOrder.customerAddress,
-        notes: adminOrder.notes || '',
-        items: adminOrder.items.map((item) => ({
-          productId: item.productId,
-          variantId: item.variantId,
-          variantLabel: item.variantTitle,
-          productName: item.productName,
-          productImage: '',
-          unit:
-            item.pricingUnit === 'piece' ? 'قطعة' : 'كيلو',
-          price: Number(item.unitPrice || 0),
-          quantity: Number(item.quantity || 0),
-          itemTotal: Number(item.totalPrice || 0),
-        })),
-        subtotal: Number(adminOrder.subtotal || 0),
-        deliveryFee: Number(adminOrder.deliveryFee || 0),
-        discountAmount: Number(adminOrder.discountAmount || 0),
-        couponCode: adminOrder.couponCode,
-        total: Number(adminOrder.totalAmount || 0),
         paymentMode: resolvedPaymentMode,
         paymentMethod: resolvedDepositMethod,
         paymentIntent: resolvedPaymentIntent,
         paymentMethodCode: resolvedPaymentMethodCode,
         customerPaymentMethodId: resolvedCustomerPaymentMethodId,
-        depositRequired: Number(adminOrder.depositAmount || 0),
-        depositPaid: 0,
-        depositStatus:
-          adminOrder.depositStatus === 'confirmed'
-            ? 'confirmed'
-            : adminOrder.depositStatus === 'rejected'
-              ? 'rejected'
-              : resolvedPaymentMode === 'cash_on_delivery' ||
-                adminOrder.depositStatus === 'not_required' ||
-                Number(adminOrder.depositAmount || 0) <= 0
-                ? 'not_required'
-                : 'pending',
-        depositTransactionRef: adminOrder.depositReference,
-        remainingAmount: Number(adminOrder.remainingAmount || 0),
-        status: statusMap[adminOrder.status] || 'new',
-        createdAt: adminOrder.createdAt,
       };
 
       return res.status(201).json({
